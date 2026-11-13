@@ -45,7 +45,7 @@ p { margin: 0 0 .8em; }
 }
 
 main { max-width: 860px; margin: 0 auto; padding: 22px 16px 20px; }
-.powered { display: flex; justify-content: center; margin-top: 30px; padding: 16px 16px calc(18px + env(safe-area-inset-bottom)); background: #17151c; }
+.powered { display: flex; justify-content: center; margin-top: 30px; padding: 16px 16px calc(18px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 .powered a { display: block; opacity: .92; transition: opacity .15s; }
 .powered a:hover { opacity: 1; }
 .powered img { width: min(360px, 82vw); height: auto; }
