@@ -28,7 +28,8 @@
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
     const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
     const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
-    sessionStorage.setItem(VERIFIER, JSON.stringify({ verifier, state }));
+    // localStorage (not sessionStorage) so sign-up survives in-app browsers and new tabs.
+    localStorage.setItem(VERIFIER, JSON.stringify({ verifier, state }));
     const q = new URLSearchParams({
       response_type: 'code', client_id: CONFIG.clientId, redirect_uri: redirectUri,
       scope: 'openid email profile', state, code_challenge: challenge, code_challenge_method: 'S256',
@@ -62,8 +63,9 @@
     const q = new URLSearchParams(location.search);
     const code = q.get('code');
     if (!code) return;
-    const saved = JSON.parse(sessionStorage.getItem(VERIFIER) || 'null');
-    sessionStorage.removeItem(VERIFIER);
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(VERIFIER) || sessionStorage.getItem(VERIFIER) || 'null'); } catch (e) {}
+    localStorage.removeItem(VERIFIER); sessionStorage.removeItem(VERIFIER);
     history.replaceState(null, '', location.pathname + location.hash);
     if (!saved || saved.state !== q.get('state')) return;
     save(await token({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: saved.verifier }));

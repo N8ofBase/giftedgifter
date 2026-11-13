@@ -110,8 +110,25 @@
   // Re-render without losing the scroll position.
   function paint(...nodes) { const y = window.scrollY; $view.replaceChildren(...nodes.flat(Infinity).filter((n) => n != null && n !== false && n !== '')); window.scrollTo(0, y); }
 
+  // ---------- pending invite ----------
+  // An invite link's code is remembered (for 14 days) until it's used, so it survives
+  // creating an account, verifying email, and links opened inside message apps.
+  const INVITE = 'gg.invite';
+  function saveInvite(code) { try { localStorage.setItem(INVITE, JSON.stringify({ code: code.toUpperCase(), at: Date.now() })); } catch (e) {} }
+  function pendingInvite() {
+    try {
+      const v = JSON.parse(localStorage.getItem(INVITE) || 'null');
+      if (v && v.code && Date.now() - v.at < 14 * 86400000) return v.code;
+      localStorage.removeItem(INVITE);
+    } catch (e) {}
+    return null;
+  }
+  function clearInvite() { try { localStorage.removeItem(INVITE); } catch (e) {} }
+  const inAppBrowser = /FBAN|FBAV|FB_IAB|Instagram|Line\/|Snapchat|GSA\/|musical_ly|TikTok|Twitter|; wv\)/i.test(navigator.userAgent);
+
   // ---------- landing ----------
   function landing() {
+    const invite = pendingInvite();
     document.getElementById('top').hidden = true;
     $view.replaceChildren(
       h('section', { class: 'hero' },
@@ -119,6 +136,11 @@
         h('h1', {}, 'Gifted Gifter'),
         h('p', { class: 'lead' }, 'Private wish lists and secret gift draws for your family and friends. Nobody double-buys, and nobody spoils the surprise.'),
         h('p', { class: 'byline' }, 'Created by N8 the Gr8'),
+        invite && h('div', { class: 'card invite-note' },
+          h('h3', {}, "You've been invited to a group!"),
+          h('p', {}, 'Create an account (or sign in if you have one) and you\'ll be added automatically.'),
+          h('p', { class: 'small muted', style: 'margin:0' }, 'Invite code: ', h('strong', { class: 'mono' }, invite))),
+        inAppBrowser && h('p', { class: 'small muted inapp-note' }, 'Opened this from a message or social app? If signing up gives you trouble, tap the ⋯ menu and choose “Open in browser”.'),
         h('div', { class: 'row' },
           h('button', { onclick: () => Auth.signUp() }, 'Create an account'),
           h('button', { class: 'ghost', onclick: () => Auth.signIn() }, 'Sign in'))),
@@ -162,7 +184,7 @@
     return fmtDate(d);
   }
   function joinCard() {
-    const input = h('input', { placeholder: 'Invite code', autocapitalize: 'characters', maxlength: 12, style: 'text-transform:uppercase' });
+    const input = h('input', { placeholder: 'Invite code', autocapitalize: 'characters', maxlength: 12, style: 'text-transform:uppercase', value: pendingInvite() || '' });
     const join = () => act(async () => { const r = await api('POST', '/join', { code: input.value }); me = await api('GET', '/me'); location.hash = '#/g/' + r.id; });
     input.addEventListener('keydown', (e) => e.key === 'Enter' && join());
     return h('div', { class: 'card stack' }, h('h2', {}, 'Join a group'), h('p', { class: 'muted small' }, 'Got a code from the organizer? Enter it here.'),
@@ -204,7 +226,13 @@
 
   // ---------- join by link ----------
   async function viewJoin(code) {
-    const r = await api('POST', '/join', { code });
+    let r;
+    try { r = await api('POST', '/join', { code }); }
+    catch (e) {
+      if (!/fetch|network|sign in/i.test(e.message)) clearInvite(); // bad or expired code: don't retry forever
+      throw new Error(e.message + ' — ask whoever invited you for the 6-letter code and enter it on your Groups page.');
+    }
+    clearInvite();
     me = await api('GET', '/me');
     toast('You\'re in! 🎉');
     location.replace('#/g/' + r.id);
@@ -592,13 +620,13 @@
 
   // ---------- start ----------
   async function start() {
+    const m = location.hash.match(/^#\/join\/([A-Za-z0-9]+)/);
+    if (m) saveInvite(m[1]);
     await Auth.ready;
-    if (!Auth.user()) {
-      if (/^#\/join\//.test(location.hash)) sessionStorage.setItem('gg.next', location.hash);
-      return landing();
-    }
-    const next = sessionStorage.getItem('gg.next');
-    if (next) { sessionStorage.removeItem('gg.next'); history.replaceState(null, '', '/' + next); }
+    if (!Auth.user()) return landing();
+    // Back from sign-up / sign-in: finish joining the group they were invited to.
+    const invite = pendingInvite();
+    if (invite && !/^#\/join\//.test(location.hash)) history.replaceState(null, '', '/#/join/' + invite);
     document.getElementById('top').hidden = false;
     try { me = await api('GET', '/me'); setInitial(); } catch (e) { /* the view will show the error */ }
     window.addEventListener('hashchange', go);
