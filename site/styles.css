@@ -44,7 +44,11 @@ p { margin: 0 0 .8em; }
   .top nav a { padding: 8px 8px; }
 }
 
-main { max-width: 860px; margin: 0 auto; padding: 22px 16px calc(60px + env(safe-area-inset-bottom)); }
+main { max-width: 860px; margin: 0 auto; padding: 22px 16px 20px; }
+.powered { display: flex; justify-content: center; padding: 18px 16px calc(28px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); margin-top: 30px; }
+.powered a { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--muted); font-size: 13px; font-weight: 500; opacity: .85; transition: opacity .15s; }
+.powered a:hover { opacity: 1; }
+.powered img { height: 34px; width: auto; }
 
 /* building blocks */
 .card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
