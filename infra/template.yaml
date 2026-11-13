@@ -1,0 +1,253 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Gifted Gifter - private wish lists and gift draws (Prism Cortex)
+
+Parameters:
+  AppDomain:
+    Type: String
+    Default: giftedgifter.prismcortex.net
+  AuthDomainPrefix:
+    Type: String
+    Default: giftedgifter-prismcortex
+    Description: Cognito managed-login prefix (must be unique across AWS)
+  DevOrigin:
+    Type: String
+    Default: http://localhost:8080
+  AmplifyOrigin:
+    Type: String
+    Default: ''
+    Description: Optional, e.g. https://main.d123abc.amplifyapp.com (no trailing slash) to sign in on the Amplify URL too
+
+Conditions:
+  HasAmplifyOrigin: !Not [!Equals [!Ref AmplifyOrigin, '']]
+
+Resources:
+  # Hosting is an Amplify app connected to the GitHub repo (push to main = deploy),
+  # set up once in the Amplify console like ICYN. See README.
+
+  # ---------- accounts ----------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: gifted-gifter-members
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AccountRecoverySetting:
+        RecoveryMechanisms: [{ Name: verified_email, Priority: 1 }]
+      Schema:
+        - { Name: email, AttributeDataType: String, Required: true, Mutable: true }
+        - { Name: name, AttributeDataType: String, Required: true, Mutable: true }
+      Policies:
+        PasswordPolicy: { MinimumLength: 8, RequireLowercase: true, RequireNumbers: true, RequireUppercase: false, RequireSymbols: false }
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: Your Gifted Gifter code
+        EmailMessage: 'Welcome to Gifted Gifter! Your code is {####}'
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref AuthDomainPrefix
+      UserPoolId: !Ref UserPool
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: gifted-gifter-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 60
+      TokenValidityUnits: { RefreshToken: days }
+      CallbackURLs:
+        - !Sub https://${AppDomain}/
+        - !If [HasAmplifyOrigin, !Sub '${AmplifyOrigin}/', !Ref AWS::NoValue]
+        - !Sub ${DevOrigin}/
+      LogoutURLs:
+        - !Sub https://${AppDomain}/
+        - !If [HasAmplifyOrigin, !Sub '${AmplifyOrigin}/', !Ref AWS::NoValue]
+        - !Sub ${DevOrigin}/
+
+  # ---------- data ----------
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: gifted-gifter
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub gifted-gifter-photos-${AWS::AccountId}
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, PUT]
+            AllowedHeaders: ['*']
+            AllowedOrigins:
+              - !Sub https://${AppDomain}
+              - !If [HasAmplifyOrigin, !Ref AmplifyOrigin, !Ref AWS::NoValue]
+              - !Ref DevOrigin
+            MaxAge: 3600
+
+  # ---------- API Lambda ----------
+  FnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{ Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: gifted-gifter
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Query]
+                Resource: !GetAtt Table.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub ${PhotoBucket.Arn}/img/*
+              - Effect: Allow
+                Action: execute-api:ManageConnections
+                Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WsApi}/prod/POST/@connections/*
+  Fn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: gifted-gifter-api
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !GetAtt FnRole.Arn
+      MemorySize: 512
+      Timeout: 15
+      Code:
+        ZipFile: "exports.handler = async () => ({ statusCode: 503, body: 'deploying' });"
+      Environment:
+        Variables:
+          TABLE: !Ref Table
+          PHOTO_BUCKET: !Ref PhotoBucket
+          USER_POOL_ID: !Ref UserPool
+          CLIENT_ID: !Ref UserPoolClient
+          WS_ENDPOINT: !Sub https://${WsApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+          ALLOW_ORIGINS: !If [HasAmplifyOrigin, !Sub 'https://${AppDomain},${AmplifyOrigin},${DevOrigin}', !Sub 'https://${AppDomain},${DevOrigin}']
+
+  # ---------- HTTP API ----------
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: gifted-gifter-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub https://${AppDomain}
+          - !If [HasAmplifyOrigin, !Ref AmplifyOrigin, !Ref AWS::NoValue]
+          - !Ref DevOrigin
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+        MaxAge: 3600
+  HttpAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: cognito
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Audience: [!Ref UserPoolClient]
+        Issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+  HttpIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt Fn.Arn
+      PayloadFormatVersion: '2.0'
+  RouteGet:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'GET /{proxy+}', AuthorizationType: JWT, AuthorizerId: !Ref HttpAuthorizer, Target: !Sub 'integrations/${HttpIntegration}' }
+  RoutePost:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'POST /{proxy+}', AuthorizationType: JWT, AuthorizerId: !Ref HttpAuthorizer, Target: !Sub 'integrations/${HttpIntegration}' }
+  RoutePut:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'PUT /{proxy+}', AuthorizationType: JWT, AuthorizerId: !Ref HttpAuthorizer, Target: !Sub 'integrations/${HttpIntegration}' }
+  RouteDelete:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'DELETE /{proxy+}', AuthorizationType: JWT, AuthorizerId: !Ref HttpAuthorizer, Target: !Sub 'integrations/${HttpIntegration}' }
+  HttpStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings: { ThrottlingBurstLimit: 40, ThrottlingRateLimit: 20 }
+  HttpInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Fn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # ---------- WebSocket API (live updates) ----------
+  WsApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: gifted-gifter-live
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+  WsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WsApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Fn.Arn}/invocations
+  WsConnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref WsApi, RouteKey: $connect, Target: !Sub 'integrations/${WsIntegration}' }
+  WsDisconnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref WsApi, RouteKey: $disconnect, Target: !Sub 'integrations/${WsIntegration}' }
+  WsDefault:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref WsApi, RouteKey: $default, Target: !Sub 'integrations/${WsIntegration}' }
+  WsDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn: [WsConnect, WsDisconnect, WsDefault]
+    Properties: { ApiId: !Ref WsApi }
+  WsStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WsApi
+      StageName: prod
+      DeploymentId: !Ref WsDeployment
+      DefaultRouteSettings: { ThrottlingBurstLimit: 40, ThrottlingRateLimit: 20 }
+  WsInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Fn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WsApi}/*
+
+Outputs:
+  ApiUrl: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com' }
+  WsUrl: { Value: !Sub 'wss://${WsApi}.execute-api.${AWS::Region}.amazonaws.com/prod' }
+  AuthDomain: { Value: !Sub 'https://${AuthDomainPrefix}.auth.${AWS::Region}.amazoncognito.com' }
+  ClientId: { Value: !Ref UserPoolClient }
+  UserPoolId: { Value: !Ref UserPool }
+  FunctionName: { Value: !Ref Fn }
