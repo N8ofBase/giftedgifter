@@ -123,7 +123,7 @@
           h('button', { onclick: () => Auth.signUp() }, 'Create an account'),
           h('button', { class: 'ghost', onclick: () => Auth.signIn() }, 'Sign in'))),
       h('div', { class: 'features' },
-        feature('📝', 'Your list, your way', 'Type an idea, paste a link from any store, or snap a photo of the thing you want.'),
+        feature('📝', 'Your list, your way', 'Type an idea, paste a link from any store, or snap a photo. Even link your Elfster or Amazon lists.'),
         feature('🎩', 'Draw names', 'Secret assignments with rules — spouses and housemates never draw each other.'),
         feature('🤫', 'Surprise stays safe', 'Gifters mark what they bought. You never see what\'s been bought for you.'),
         feature('⚡', 'Always up to date', 'Lists and purchases update live for everyone in the group.')));
@@ -150,7 +150,7 @@
         h('div', { class: 'card stack' }, h('h2', {}, 'Start a group'), h('p', { class: 'muted small' }, 'You\'ll be the organizer — you can invite people and draw names.'), h('button', { onclick: newGroupModal }, '+ New group')),
         joinCard()),
       h('div', { class: 'section card row between' },
-        h('div', {}, h('h3', {}, 'Your wish list'), h('p', { class: 'muted small', style: 'margin:0' }, 'One list, shared with everyone in your groups.')),
+        h('div', {}, h('h3', {}, 'Your wish list'), h('p', { class: 'muted small', style: 'margin:0' }, 'One list, shared with everyone in your groups. Even link your Elfster or Amazon lists.')),
         h('a', { class: 'btn ghost', href: '#/list' }, 'Edit my list')));
   }
   function countdown(d) {
@@ -353,7 +353,9 @@
   function itemCard(i, ctx) {
     const photo = i.imageUrl ? h('div', { class: 'photo' }, h('img', { src: i.imageUrl, alt: i.title, loading: 'lazy' })) : h('div', { class: 'photo none' }, i.url ? '🔗' : '🎁');
     const meta = h('div', { class: 'meta' },
+      i.priority === 3 && h('span', { class: 'pill need' }, 'I NEED THIS!'),
       i.priority === 2 && h('span', { class: 'pill berry' }, '★ Most wanted'),
+      i.priority === 4 && h('span', { class: 'pill blue' }, 'Parent suggestion'),
       i.priority === 1 && h('span', { class: 'pill gold' }, 'Really want'),
       i.price && h('span', { class: 'pill' }, i.price),
       i.qty > 1 && h('span', { class: 'pill' }, `Wants ${i.qty}`));
@@ -394,10 +396,10 @@
     const i = existing || {};
     let imageKey = i.imageKey || '';
     const title = h('input', { value: i.title || '', placeholder: 'What would you like?', maxlength: 140 });
-    const url = h('input', { type: 'url', value: i.url || '', placeholder: 'https://… (optional)', inputmode: 'url' });
+    const url = h('input', { type: 'url', value: i.url || '', placeholder: 'A product, or your whole Elfster or Amazon list', inputmode: 'url' });
     const price = h('input', { value: i.price || '', placeholder: '$25 (optional)', maxlength: 24 });
     const qty = h('input', { type: 'number', min: 1, max: 20, value: i.qty || 1 });
-    const priority = h('select', {}, h('option', { value: 0 }, 'Would be nice'), h('option', { value: 1 }, 'Really want'), h('option', { value: 2 }, '★ Most wanted'));
+    const priority = h('select', {}, h('option', { value: 0 }, 'Would be nice'), h('option', { value: 1 }, 'Really want'), h('option', { value: 2 }, '★ Most wanted'), h('option', { value: 3 }, 'I NEED THIS!'), h('option', { value: 4 }, 'Parent suggestion'));
     priority.value = String(i.priority || 0);
     const notes = h('textarea', { placeholder: 'Size, color, model, "any flavor", where to find it…', maxlength: 600 }, i.notes || '');
     const pic = photoPicker(i.imageUrl, (key) => { imageKey = key; });
@@ -472,6 +474,9 @@
   function guessTitle(u) {
     try {
       const x = new URL(u);
+      const hn = x.hostname, pn = x.pathname;
+      if (/elfster\./i.test(hn)) return 'My Elfster wish list';
+      if (/amazon\.|amzn\./i.test(hn) && /wishlist|registry|\/hz\//i.test(pn)) return 'My Amazon wish list';
       const parts = x.pathname.split('/').filter((p) => p && !/^(dp|gp|product|p|ip|itm|item|products|s)$/i.test(p) && !/^[A-Z0-9]{10}$/.test(p) && !/^\d+$/.test(p));
       const best = parts.sort((a, b) => b.length - a.length)[0];
       if (best && best.length > 3) return decodeURIComponent(best).replace(/\.\w{2,5}$/, '').replace(/[-_+]+/g, ' ').trim();

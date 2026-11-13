@@ -40,7 +40,7 @@ function cleanItem(b, uid) {
     url: cleanUrl(b.url),
     price: line(b.price, 24),
     notes: text(b.notes, 600),
-    priority: [0, 1, 2].includes(b.priority) ? b.priority : 0,
+    priority: [0, 1, 2, 3, 4].includes(b.priority) ? b.priority : 0,
     qty: Number.isInteger(b.qty) && b.qty >= 1 && b.qty <= 20 ? b.qty : 1,
     imageKey: typeof b.imageKey === 'string' && b.imageKey.startsWith(`img/${uid}/`) && /^[\w/.-]{10,120}$/.test(b.imageKey) ? b.imageKey : '',
   };
@@ -48,9 +48,20 @@ function cleanItem(b, uid) {
   if (!item.title && item.imageKey) item.title = 'Something like this';
   return item.title ? item : null;
 }
+// Whole wish lists from other sites get a friendly name.
+function listTitle(x) {
+  const h = x.hostname, p = x.pathname;
+  if (/elfster\./i.test(h)) return 'My Elfster wish list';
+  if (/amazon\.|amzn\./i.test(h) && /wishlist|registry|\/hz\//i.test(p)) return 'My Amazon wish list';
+  if (/target\.com/i.test(h) && /registry|list/i.test(p)) return 'My Target list';
+  if (/walmart\.com/i.test(h) && /lists|registry/i.test(p)) return 'My Walmart list';
+  return '';
+}
 function titleFromUrl(u) {
   try {
     const x = new URL(u);
+    const lt = listTitle(x);
+    if (lt) return lt;
     const parts = x.pathname.split('/').filter((p) => p && !/^(dp|gp|product|p|ip|itm|item|products|s)$/i.test(p) && !/^[A-Z0-9]{10}$/.test(p) && !/^\d+$/.test(p));
     const best = parts.sort((a, b) => b.length - a.length)[0];
     if (best && best.length > 3) return decodeURIComponent(best).replace(/\.\w{2,5}$/, '').replace(/[-_+]+/g, ' ').trim().slice(0, 140);
@@ -92,7 +103,9 @@ function itemOut(i, viewer) {
   if (viewer !== i.owner && i.boughtBy) o.bought = { by: i.boughtName, mine: i.boughtBy === viewer, at: i.boughtAt };
   return o;
 }
-const sortItems = (a, b) => (b.priority - a.priority) || (a.createdAt < b.createdAt ? -1 : 1);
+// 3 I NEED THIS! > 2 most wanted > 1 really want > 4 parent suggestion > 0 nice
+const RANK = { 3: 4, 2: 3, 1: 2, 4: 1, 0: 0 };
+const sortItems = (a, b) => (RANK[b.priority] - RANK[a.priority]) || (a.createdAt < b.createdAt ? -1 : 1);
 
 // ---------- routes ----------
 async function getMe(db, claims) {

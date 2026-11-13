@@ -56,6 +56,8 @@ main { max-width: 860px; margin: 0 auto; padding: 22px 16px calc(60px + env(safe
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: #efe6d6; color: var(--ink); }
 .pill.green { background: #e1ede6; color: var(--pine); }
 .pill.gold { background: var(--gold-soft); color: #7a5410; }
+.pill.need { background: var(--berry); color: #fff; letter-spacing: .02em; }
+.pill.blue { background: #dde7f3; color: #24466e; }
 .pill.berry { background: #f7dfe0; color: #8f2329; }
 
 button, .btn { font: 600 15px var(--sans); border: 0; border-radius: 12px; padding: 11px 16px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
