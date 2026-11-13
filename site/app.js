@@ -118,6 +118,7 @@
         h('img', { class: 'logo', src: 'icon.svg', alt: '' }),
         h('h1', {}, 'Gifted Gifter'),
         h('p', { class: 'lead' }, 'Private wish lists and secret gift draws for your family and friends. Nobody double-buys, and nobody spoils the surprise.'),
+        h('p', { class: 'byline' }, 'Created by N8 the Gr8'),
         h('div', { class: 'row' },
           h('button', { onclick: () => Auth.signUp() }, 'Create an account'),
           h('button', { class: 'ghost', onclick: () => Auth.signIn() }, 'Sign in'))),
