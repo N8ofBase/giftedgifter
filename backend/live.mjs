@@ -31,11 +31,20 @@ export async function verifyIdToken(token) {
   return c;
 }
 
+// Kid devices connect with "kid.<device token>" (see kid accounts in index.mjs).
+async function kidSocketClaims(db, token) {
+  const t = token && await db.get('KIDTOKEN#' + crypto.createHash('sha256').update(token).digest('hex'), 'META');
+  return t ? { sub: t.kidId } : null;
+}
+
 export async function handleSocket(event) {
   const db = await store();
   const { eventType, connectionId } = event.requestContext;
   if (eventType === 'CONNECT') {
-    const claims = await verifyIdToken(event.queryStringParameters?.token).catch(() => null);
+    const raw = event.queryStringParameters?.token || '';
+    const claims = raw.startsWith('kid.')
+      ? await kidSocketClaims(db, raw.slice(4))
+      : await verifyIdToken(raw).catch(() => null);
     if (!claims) return { statusCode: 401 };
     const ttl = Math.floor(Date.now() / 1000) + CONN_TTL;
     await db.put({ pk: 'USER#' + claims.sub, sk: 'CONN#' + connectionId, connectionId, ttl });

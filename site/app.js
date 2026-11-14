@@ -34,15 +34,38 @@
   }
 
   // ---------- API ----------
+  // ---------- kid sessions (a kid's phone, signed in with a code from a parent) ----------
+  const KID = 'gg.kid';
+  function kidSession() { try { return JSON.parse(localStorage.getItem(KID) || 'null'); } catch (e) { return null; } }
+  const isKid = () => !!kidSession();
+  function signOut() {
+    if (isKid()) { localStorage.removeItem(KID); location.replace('/'); return; }
+    Auth.signOut();
+  }
+  async function kidSignIn(code) {
+    const res = await fetch(CFG.api + '/public/kid-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'That code didn\'t work');
+    localStorage.setItem(KID, JSON.stringify({ token: data.token, id: data.id, name: data.name }));
+  }
+
+  // ---------- API ----------
   async function api(method, path, body) {
-    const token = await Auth.idToken();
-    if (!token) { Auth.signIn(); throw new Error('Please sign in'); }
-    const res = await fetch(CFG.api + path, {
+    const kid = kidSession();
+    let url = CFG.api + path, auth;
+    if (kid) { url = CFG.api + '/kid' + path; auth = 'Kid ' + kid.token; }
+    else {
+      const token = await Auth.idToken();
+      if (!token) { Auth.signIn(); throw new Error('Please sign in'); }
+      auth = 'Bearer ' + token;
+    }
+    const res = await fetch(url, {
       method,
-      headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { Authorization: auth, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && kid) { localStorage.removeItem(KID); setTimeout(() => location.replace('/'), 2500); }
     if (!res.ok) throw new Error(data.error || data.message || 'Something went wrong');
     return data;
   }
@@ -55,7 +78,8 @@
   const live = { sock: null, tries: 0, ping: null, timer: null };
   async function connectLive() {
     if (!CFG.ws || live.sock) return;
-    const token = await Auth.idToken();
+    const kid = kidSession();
+    const token = kid ? 'kid.' + kid.token : await Auth.idToken();
     if (!token) return;
     const s = new WebSocket(CFG.ws + '?token=' + encodeURIComponent(token));
     live.sock = s;
@@ -89,6 +113,7 @@
     [/^#\/join\/([A-Za-z0-9]+)$/, viewJoin],
     [/^#\/g\/([\w-]+)$/, viewGroup],
     [/^#\/g\/([\w-]+)\/u\/([\w|.@-]+)$/, viewMember],
+    [/^#\/kids\/(kid_[\w-]+)\/list$/, (kidId, quiet) => viewMyList(quiet, kidId)],
   ];
   async function go() {
     const hash = location.hash || '#/';
@@ -143,12 +168,25 @@
         inAppBrowser && h('p', { class: 'small muted inapp-note' }, 'Opened this from a message or social app? If signing up gives you trouble, tap the ⋯ menu and choose “Open in browser”.'),
         h('div', { class: 'row' },
           h('button', { onclick: () => Auth.signUp() }, 'Create an account'),
-          h('button', { class: 'ghost', onclick: () => Auth.signIn() }, 'Sign in'))),
+          h('button', { class: 'ghost', onclick: () => Auth.signIn() }, 'Sign in')),
+        h('p', { class: 'small', style: 'margin-top:14px' }, h('button', { class: 'link', onclick: kidSignInModal }, 'Kid sign-in'))),
       h('div', { class: 'features' },
         feature('📝', 'Your list, your way', 'Type an idea, paste a link from any store, or snap a photo. Even link your Elfster or Amazon lists.'),
         feature('🎩', 'Draw names', 'Secret assignments with rules — spouses and housemates never draw each other.'),
         feature('🤫', 'Surprise stays safe', 'Gifters mark what they bought. You never see what\'s been bought for you.'),
         feature('⚡', 'Always up to date', 'Lists and purchases update live for everyone in the group.')));
+  }
+  function kidSignInModal() {
+    const input = h('input', { placeholder: 'Code from your parent', autocapitalize: 'characters', maxlength: 10, style: 'text-transform:uppercase;font-size:22px;letter-spacing:.15em;text-align:center' });
+    const go = async (btn) => {
+      btn.disabled = true;
+      const ok = await act(() => kidSignIn(input.value));
+      btn.disabled = false;
+      if (ok) location.replace('/#/');
+    };
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && go(e.target));
+    modal('Kid sign-in', h('div', {}, h('p', { class: 'muted' }, 'Ask your parent for a sign-in code. They can make one in Gifted Gifter under Account → Kids.'), input),
+      () => [h('button', { onclick: (e) => go(e.target) }, 'Sign in')]);
   }
   const feature = (e, t, p) => h('div', { class: 'card' }, h('div', { class: 'emoji' }, e), h('h3', {}, t), h('p', {}, p));
 
@@ -168,7 +206,7 @@
               g.kind === 'lists' ? h('span', { class: 'pill blue' }, 'Shared lists') : g.drawn ? h('span', { class: 'pill green' }, 'Names drawn') : null,
               g.admin ? h('span', { class: 'pill' }, 'Organizer') : null))))
         : h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '🎄'), h('p', {}, 'No groups yet. Start one for your family or friends, or join with an invite code.')),
-      h('div', { class: 'section grid' },
+      isKid() ? null : h('div', { class: 'section grid' },
         h('div', { class: 'card stack' }, h('h2', {}, 'Start a group'), h('p', { class: 'muted small' }, 'A gift exchange with a name draw, or just a family or friends group that shares lists.'), h('button', { onclick: newGroupModal }, '+ New group')),
         joinCard()),
       h('div', { class: 'section card row between' },
@@ -282,11 +320,11 @@
             h('div', { class: 'name' }, m.name, m.id === g.you ? ' (you)' : '', m.id === g.ownerId ? ' · organizer' : ''),
             h('div', { class: 'muted small' }, m.items ? `${m.items} on their list` : 'No list yet')),
           h('span', { class: 'muted' }, '›'))))),
-      h('div', { class: 'section card stack' },
+      isKid() ? null : h('div', { class: 'section card stack' },
         h('h2', {}, 'Invite people'),
         h('p', { class: 'muted small' }, 'Share the link, or have them enter the code on their Groups page.'),
         h('div', { class: 'row' }, h('span', { class: 'code-box' }, g.code), h('button', { onclick: share }, 'Share invite link'))),
-      g.admin ? adminPanel(g, notInDraw) : h('div', { class: 'section' }, h('button', { class: 'danger-text', onclick: () => leaveGroup(g) }, 'Leave this group')));
+      g.admin ? adminPanel(g, notInDraw) : isKid() ? null : h('div', { class: 'section' }, h('button', { class: 'danger-text', onclick: () => leaveGroup(g) }, 'Leave this group')));
   }
 
   function assignment(g) {
@@ -418,7 +456,7 @@
     const actions = h('div', { class: 'actions' });
     if (ctx.mine) {
       actions.append(h('button', { class: 'ghost small', onclick: () => itemModal(i) }, 'Edit'),
-        h('button', { class: 'danger-text', onclick: () => confirm(`Remove "${i.title}"?`) && act(async () => { await api('DELETE', '/items/' + i.id); currentRender(true); }, 'Removed') }, 'Remove'));
+        h('button', { class: 'danger-text', onclick: () => confirm(`Remove "${i.title}"?`) && act(async () => { await api('DELETE', listBase() + '/items/' + i.id); currentRender(true); }, 'Removed') }, 'Remove'));
     } else if (ctx.gid) {
       const path = `/groups/${ctx.gid}/lists/${encodeURIComponent(ctx.owner)}/items/${i.id}/bought`;
       if (!i.bought) actions.append(h('button', { class: 'small', onclick: (e) => { e.target.disabled = true; act(async () => { await api('POST', path); currentRender(true); }, `Marked bought — it's on your Shopping page`).then(() => { e.target.disabled = false; }); } }, '✓ I bought this'));
@@ -442,10 +480,25 @@
   // My list has a tab per group: each item is shared with all your groups, or only the ones you pick.
   let listTab = 'all';
   const visibleIn = (i, gid) => !(i.groups && i.groups.length) || i.groups.includes(gid);
-  async function viewMyList() {
-    const [{ items }, prof] = await Promise.all([api('GET', '/items'), api('GET', '/me')]);
-    me = prof;
-    const groups = me.groups;
+  // listOwner is null for your own list, or {id, name, groups} when a parent edits a kid's list.
+  let listOwner = null;
+  const listBase = () => (listOwner ? `/kids/${listOwner.id}` : '');
+  const listGroups = () => (listOwner ? listOwner.groups : (me && me.groups) || []);
+  async function viewMyList(quiet, kidId) {
+    let items;
+    if (kidId) {
+      const [{ kids }, r] = await Promise.all([api('GET', '/kids'), api('GET', `/kids/${kidId}/items`)]);
+      const k = kids.find((x) => x.id === kidId);
+      if (!k) throw new Error('Kid not found');
+      listOwner = { id: k.id, name: k.name, groups: k.groups };
+      items = r.items;
+    } else {
+      listOwner = null;
+      const [r, prof] = await Promise.all([api('GET', '/items'), api('GET', '/me')]);
+      me = prof; items = r.items;
+    }
+    const groups = listGroups();
+    const first = listOwner ? listOwner.name.split(' ')[0] : '';
     if (listTab !== 'all' && !groups.some((g) => g.id === listTab)) listTab = 'all';
     const tabGroup = groups.find((g) => g.id === listTab);
     const shown = tabGroup ? items.filter((i) => visibleIn(i, tabGroup.id)) : items;
@@ -455,12 +508,17 @@
     const tabs = groups.length > 1 && h('div', { class: 'list-tabs', role: 'tablist' },
       [{ id: 'all', name: 'Everything' }, ...groups].map((g) => h('button', {
         role: 'tab', 'aria-selected': String(listTab === g.id), class: listTab === g.id ? 'on' : '',
-        onclick: () => { listTab = g.id; viewMyList(); },
+        onclick: () => { listTab = g.id; viewMyList(true, kidId); },
       }, g.name)));
     paint(
       h('div', { class: 'row between' },
-        h('div', {}, h('h1', {}, 'My wish list'), h('p', { class: 'muted', style: 'margin:0' },
-          tabGroup ? `What people in ${tabGroup.name} see. Things you add here go to this group only.` : 'Everything on your list. You\'ll never see what\'s been bought.')),
+        h('div', {},
+          listOwner && h('a', { class: 'back', href: '#/me' }, '← Account'),
+          h('h1', {}, listOwner ? `${first}'s wish list` : 'My wish list'),
+          h('p', { class: 'muted', style: 'margin:0' },
+            listOwner && !groups.length ? `${first} isn't in any groups yet — add them to one under Account → Kids.` :
+            tabGroup ? `What people in ${tabGroup.name} see. Things you add here go to this group only.` :
+            listOwner ? `You're editing ${first}'s list. You won't see what's been bought for ${first}.` : 'Everything on your list. You\'ll never see what\'s been bought.')),
         h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: imp }, 'Import'), h('button', { onclick: add }, '+ Add something'))),
       tabs,
       h('div', { class: 'section' }, shown.length
@@ -472,7 +530,7 @@
 
   // "Who can see this": all my groups, or only some.
   function audiencePicker(initial) {
-    const groups = (me && me.groups) || [];
+    const groups = listGroups();
     let picked = new Set(initial || []);
     let all = picked.size === 0;
     if (groups.length < 2) return { el: null, value: () => [] };
@@ -526,7 +584,7 @@
       const data = { title: title.value, url: url.value.trim(), price: price.value, priority: Number(priority.value), qty: Math.max(1, Math.min(20, parseInt(qty.value, 10) || 1)), notes: notes.value, imageKey, groups };
       if (data.url && !/^https?:\/\//i.test(data.url)) data.url = 'https://' + data.url;
       e.target.disabled = true;
-      const ok = await act(() => existing ? api('PUT', '/items/' + i.id, data) : api('POST', '/items', data), existing ? 'Saved' : 'Added to your list');
+      const ok = await act(() => existing ? api('PUT', listBase() + '/items/' + i.id, data) : api('POST', listBase() + '/items', data), existing ? 'Saved' : 'Added to the list');
       e.target.disabled = false;
       if (ok) { closeIt(); currentRender(true); }
     } }, existing ? 'Save' : 'Add')]);
@@ -557,7 +615,7 @@
       try {
         const blob = await shrink(f);
         show(URL.createObjectURL(blob));
-        const up = await api('POST', '/uploads', { contentType: 'image/jpeg' });
+        const up = await api('POST', listBase() + '/uploads', { contentType: 'image/jpeg' });
         const res = await fetch(up.uploadUrl.startsWith('/') ? CFG.api + up.uploadUrl : up.uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
         if (!res.ok) throw new Error('Photo upload failed');
         onKey(up.key);
@@ -661,7 +719,7 @@
       e.target.disabled = true;
       let groups;
       try { groups = aud.value(); } catch (err) { return toast(err.message, true); }
-      const ok = await act(() => api('POST', '/items', { items: chosen, groups }), `Imported ${chosen.length} item${chosen.length === 1 ? '' : 's'}`);
+      const ok = await act(() => api('POST', listBase() + '/items', { items: chosen, groups }), `Imported ${chosen.length} item${chosen.length === 1 ? '' : 's'}`);
       e.target.disabled = false;
       if (ok) { close(); currentRender(true); }
     } }, 'Import')]);
@@ -688,24 +746,95 @@
 
   // ---------- account ----------
   async function viewMe() {
-    if (!me) me = await api('GET', '/me');
+    me = await api('GET', '/me');
+    if (me.kid) {
+      return paint(
+        h('h1', {}, 'Your account'),
+        h('div', { class: 'card stack' },
+          h('div', { class: 'row', style: 'flex-wrap:nowrap' }, avatar(me.name, me.id), h('div', {}, h('div', { style: 'font-weight:600' }, me.name), h('div', { class: 'muted small' }, 'Kid account' + (me.parentName ? ' · set up by ' + me.parentName : '')))),
+          h('p', { class: 'muted small', style: 'margin:0' }, 'Want to change your name or groups? Ask your parent.')),
+        h('div', { class: 'section' }, h('button', { class: 'ghost', onclick: () => confirm('Sign out on this phone? You\'ll need a new code from your parent to sign back in.') && signOut() }, 'Sign out')));
+    }
     const name = h('input', { value: me.name, maxlength: 40 });
+    const { kids } = await api('GET', '/kids');
     paint(
       h('h1', {}, 'Your account'),
       h('div', { class: 'card stack' },
         h('div', { class: 'field' }, h('label', {}, 'Your name (what your groups see)'), name),
         h('p', { class: 'muted small' }, 'Signed in as ' + (me.email || 'you')),
         h('div', { class: 'row' }, h('button', { onclick: () => act(async () => { const r = await api('PUT', '/me', { name: name.value }); me.name = r.name; setInitial(); }, 'Saved') }, 'Save'))),
-      h('div', { class: 'section' }, h('button', { class: 'ghost', onclick: () => Auth.signOut() }, 'Sign out')));
+      kidsCard(kids),
+      h('div', { class: 'section' }, h('button', { class: 'ghost', onclick: signOut }, 'Sign out')));
+  }
+
+  // ---------- kids (parent side) ----------
+  function kidsCard(kids) {
+    return h('div', { class: 'section card stack' },
+      h('div', { class: 'row between' }, h('h2', { style: 'margin:0' }, 'Kids'), h('button', { class: 'small', onclick: () => kidModal(null) }, '+ Add a kid')),
+      h('p', { class: 'muted small', style: 'margin:0' }, 'Kid accounts don\'t need an email. You set them up here, then sign them in on their phone with a one-time code.'),
+      kids.length ? h('div', {}, kids.map((k) => h('div', { class: 'kid-row' },
+        h('div', { class: 'row', style: 'flex-wrap:nowrap' }, avatar(k.name, k.id),
+          h('div', { class: 'grow' }, h('div', { style: 'font-weight:600' }, k.name),
+            h('div', { class: 'muted small' }, [k.groups.length ? k.groups.map((g) => g.name).join(', ') : 'No groups yet', `${k.items} on their list`, k.devices ? `signed in on ${k.devices} device${k.devices === 1 ? '' : 's'}` : 'not signed in anywhere'].join(' · ')))),
+        h('div', { class: 'row', style: 'margin-top:8px' },
+          h('button', { class: 'small', onclick: () => phoneModal(k) }, 'Set up a phone'),
+          h('a', { class: 'btn ghost small', href: `#/kids/${k.id}/list` }, 'Edit list'),
+          h('button', { class: 'ghost small', onclick: () => kidModal(k) }, 'Name & groups'),
+          k.devices ? h('button', { class: 'danger-text', onclick: () => confirm(`Sign ${k.name} out of every device?`) && act(async () => { await api('DELETE', `/kids/${k.id}/devices`); currentRender(true); }, 'Signed out') }, 'Sign out devices') : null,
+          h('button', { class: 'danger-text', onclick: () => confirm(`Remove ${k.name}'s account and list? This can't be undone.`) && act(async () => { await api('DELETE', `/kids/${k.id}`); currentRender(true); }, 'Removed') }, 'Remove'))))) : null);
+  }
+
+  function kidModal(k) {
+    const name = h('input', { value: k ? k.name : '', placeholder: 'First name', maxlength: 40 });
+    const have = new Set(k ? k.groups.map((g) => g.id) : []);
+    const groups = (me && me.groups) || [];
+    const boxes = groups.map((g) => { const cb = h('input', { type: 'checkbox', checked: k ? have.has(g.id) : true, value: g.id }); return { cb, el: h('label', { class: 'check' }, cb, g.name) }; });
+    const body = h('div', {},
+      h('div', { class: 'field' }, h('label', {}, 'Name'), name),
+      h('div', { class: 'field' }, h('label', {}, 'Groups they\'re in'),
+        groups.length ? boxes.map((b) => b.el) : h('p', { class: 'muted small' }, 'Start or join a group first, then add them to it.')));
+    modal(k ? `${k.name}'s account` : 'Add a kid', body, (close) => [h('button', { onclick: (e) => {
+      e.target.disabled = true;
+      const data = { name: name.value, groups: boxes.filter((b) => b.cb.checked).map((b) => b.cb.value) };
+      act(async () => {
+        if (k) await api('PUT', `/kids/${k.id}`, data);
+        else { const r = await api('POST', '/kids', data); close(); currentRender(true); return phoneModal({ id: r.id, name: name.value.trim() }); }
+        close(); currentRender(true);
+      }, k ? 'Saved' : null).then(() => { e.target.disabled = false; });
+    } }, k ? 'Save' : 'Add')]);
+  }
+
+  async function phoneModal(k) {
+    let r;
+    try { r = await api('POST', `/kids/${k.id}/login-code`); } catch (e) { return toast(e.message, true); }
+    const link = `${location.origin}/#/kid/${r.code}`;
+    const share = async () => {
+      if (navigator.share) { try { await navigator.share({ title: 'Gifted Gifter', text: `${k.name}, tap to sign in to Gifted Gifter`, url: link }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+      await navigator.clipboard.writeText(link); toast('Sign-in link copied');
+    };
+    const mins = Math.round((new Date(r.expiresAt) - Date.now()) / 60000);
+    modal(`Sign ${k.name} in on a phone`, h('div', { class: 'stack' },
+      h('p', {}, `On ${k.name}'s phone, open this link:`),
+      h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('input', { value: link, readonly: true, onfocus: (e) => e.target.select() }), h('button', { onclick: share }, 'Share')),
+      h('p', { class: 'muted' }, `Or go to ${location.host}, tap “Kid sign-in” and enter:`),
+      h('div', { class: 'code-box', style: 'text-align:center;font-size:30px' }, r.code),
+      h('p', { class: 'muted small' }, `The code works once and expires in ${mins} minutes. ${k.name} stays signed in on that phone until you sign them out.`)),
+      (close) => [h('button', { onclick: close }, 'Done')]);
   }
   function setInitial() { document.getElementById('me-initial').textContent = initials(me && me.name); }
 
   // ---------- start ----------
   async function start() {
+    const kidLink = location.hash.match(/^#\/kid\/([A-Za-z0-9]+)/);
+    if (kidLink) {
+      history.replaceState(null, '', '/#/');
+      try { await kidSignIn(kidLink[1]); }
+      catch (e) { landing(); return toast(e.message, true); }
+    }
     const m = location.hash.match(/^#\/join\/([A-Za-z0-9]+)/);
-    if (m) saveInvite(m[1]);
+    if (m && !isKid()) saveInvite(m[1]);
     await Auth.ready;
-    if (!Auth.user()) return landing();
+    if (!Auth.user() && !isKid()) return landing();
     // Back from sign-up / sign-in: finish joining the group they were invited to.
     const invite = pendingInvite();
     if (invite && !/^#\/join\//.test(location.hash)) history.replaceState(null, '', '/#/join/' + invite);

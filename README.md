@@ -8,6 +8,7 @@ It will live at **https://giftedgifter.prismcortex.net**.
 - **Groups**: anyone can start one and invite people with a link or a 6-letter code. Your one list is shared with everyone in all your groups.
 - **Draw names**: the organizer sets households (spouses or housemates never draw each other), "never pair" exclusions, and an optional "no swaps" rule, then draws. Each person sees only their own match, behind a tap-to-reveal blur. People who joined after the draw get flagged so the organizer can redraw.
 - **Mark as bought**: one tap, with undo. Everyone else sees "Bought by Jen" so nobody doubles up. The person the list belongs to never sees it, not even through the API. Bought items collect on your **Shopping** page, and if someone deletes something you already bought, it stays there marked "Removed from their list".
+- **Kid accounts**: no email needed. A parent adds a kid under Account → Kids, picks their groups, and taps **Set up a phone** for a one-time code/link (15 minutes). The kid stays signed in on that phone until the parent signs them out. Kids keep their own list and see their groups' lists but can't create, join or leave groups; parents can edit a kid's list without seeing what's been bought for them.
 - **Live**: lists, purchases, joins and draws update for everyone right away over a WebSocket.
 
 ## Stack (same pattern as ICYN)
@@ -76,3 +77,8 @@ All routes need a Cognito ID token (`Authorization: Bearer …`).
 | `POST/DELETE /groups/{gid}/draw` | draw / clear (organizer) |
 | `GET /groups/{gid}/lists/{uid}` | a member's list (no bought info if it's yours) |
 | `POST/DELETE /groups/{gid}/lists/{uid}/items/{id}/bought` | mark / unmark bought |
+| `GET/POST /kids` · `PUT/DELETE /kids/{kid}` | a parent's kid accounts (name, groups) |
+| `POST /kids/{kid}/login-code` · `DELETE /kids/{kid}/devices` | one-time phone sign-in code / sign out everywhere |
+| `/kids/{kid}/items…`, `/kids/{kid}/uploads` | parent edits the kid's list |
+| `POST /public/kid-login {code}` (no sign-in) | kid's phone trades the code for a device token |
+| `/kid/…` with `Authorization: Kid <token>` | the same API for a kid's phone (limited) |

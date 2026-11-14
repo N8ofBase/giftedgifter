@@ -130,7 +130,9 @@ async function getMe(db, claims) {
     groups.push({ id: meta.id, name: meta.name, kind: kindOf(meta), date: meta.date, budget: meta.budget, members: ms.length, drawn: !!meta.drawnAt, admin: meta.ownerId === claims.sub });
   }
   groups.sort((a, b) => (a.date || '9') < (b.date || '9') ? -1 : 1);
-  return { id: p.uid, name: p.name, email: p.email, groups };
+  const out = { id: p.uid, name: p.name, email: p.email, groups };
+  if (p.kid) { out.kid = true; out.parentName = (await db.get('USER#' + p.parentId, 'PROFILE'))?.name || ''; }
+  return out;
 }
 
 async function putMe(db, claims, b) {
@@ -395,6 +397,177 @@ async function resetDraw(db, uid, gid) {
   return { ok: true };
 }
 
+// ---------- kid accounts ----------
+// A parent (a normal Cognito account) creates kids. A kid signs in on a phone with a
+// one-time code from the parent and gets a long-lived device token, stored hashed:
+//   USER#<parent> / KID#<kidId>      the parent's link to the kid
+//   USER#<kidId>  / PROFILE          {name, kid: true, parentId}
+//   USER#<kidId>  / TOKEN#<hash>     one per signed-in device
+//   KIDTOKEN#<hash> / META           {kidId}  token lookup
+//   KIDCODE#<code>  / META           {kidId, exp}  one-time sign-in code (15 min)
+const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+const KID_CODE_MS = 15 * 60 * 1000;
+
+async function kidOf(db, parentUid, kidId) {
+  const link = await db.get('USER#' + parentUid, 'KID#' + kidId);
+  if (!link) fail(404, 'Kid not found');
+  const p = await db.get('USER#' + kidId, 'PROFILE');
+  if (!p) fail(404, 'Kid not found');
+  return p;
+}
+
+async function listKids(db, parentUid) {
+  const links = await db.query('USER#' + parentUid, 'KID#');
+  const out = [];
+  for (const l of links) {
+    const p = await db.get('USER#' + l.kidId, 'PROFILE');
+    if (!p) continue;
+    const gs = await myGroups(db, l.kidId);
+    const groups = [];
+    for (const g of gs) { const meta = await db.get('GROUP#' + g.gid, 'META'); if (meta) groups.push({ id: meta.id, name: meta.name }); }
+    const devices = (await db.query('USER#' + l.kidId, 'TOKEN#')).length;
+    const items = (await db.query('USER#' + l.kidId, 'ITEM#')).length;
+    out.push({ id: l.kidId, name: p.name, groups, devices, items });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function setKidGroups(db, parentUid, kid, wanted) {
+  const mine = new Set((await myGroups(db, parentUid)).map((g) => g.gid));
+  const target = new Set((Array.isArray(wanted) ? wanted : []).filter((g) => mine.has(g)));
+  const current = new Set((await myGroups(db, kid.uid)).map((g) => g.gid));
+  for (const gid of current) {
+    if (target.has(gid)) continue;
+    await db.del('GROUP#' + gid, 'MEMBER#' + kid.uid);
+    await db.del('USER#' + kid.uid, 'GROUP#' + gid);
+    await notify((await members(db, gid)).map((m) => m.uid), { type: 'changed', scope: 'group', groupId: gid });
+  }
+  for (const gid of target) {
+    if (current.has(gid)) continue;
+    const meta = await db.get('GROUP#' + gid, 'META');
+    if (!meta) continue;
+    if ((await members(db, gid)).length >= MAX_MEMBERS) fail(400, `${meta.name} is full`);
+    await join(db, kid, meta);
+    await notify((await members(db, gid)).map((m) => m.uid), { type: 'changed', scope: 'group', groupId: gid });
+  }
+}
+
+async function createKid(db, claims, b) {
+  const parent = await profile(db, claims);
+  if (parent.kid) fail(403, 'Ask a parent to do that');
+  const name = cleanName(b.name);
+  if (!name) fail(400, "What's their name?");
+  if ((await db.query('USER#' + parent.uid, 'KID#')).length >= 12) fail(400, 'Up to 12 kids per account');
+  const kidId = 'kid_' + newId();
+  const kid = { pk: 'USER#' + kidId, sk: 'PROFILE', uid: kidId, name, kid: true, parentId: parent.uid, email: '', createdAt: now() };
+  await db.put(kid);
+  await db.put({ pk: 'USER#' + parent.uid, sk: 'KID#' + kidId, kidId });
+  await setKidGroups(db, parent.uid, kid, b.groups);
+  return { id: kidId };
+}
+
+async function updateKid(db, parentUid, kidId, b) {
+  const kid = await kidOf(db, parentUid, kidId);
+  if (b.name !== undefined) {
+    const name = cleanName(b.name);
+    if (!name) fail(400, 'Name needs some letters');
+    kid.name = name;
+    await db.put(kid);
+    for (const g of await myGroups(db, kidId)) {
+      const m = await db.get('GROUP#' + g.gid, 'MEMBER#' + kidId);
+      if (m) { m.name = name; await db.put(m); }
+    }
+  }
+  if (b.groups !== undefined) await setKidGroups(db, parentUid, kid, b.groups);
+  return { ok: true };
+}
+
+async function signOutKid(db, kidId) {
+  for (const t of await db.query('USER#' + kidId, 'TOKEN#')) {
+    await db.del('KIDTOKEN#' + t.hash, 'META');
+    await db.del(t.pk, t.sk);
+  }
+}
+
+async function deleteKid(db, parentUid, kidId) {
+  const kid = await kidOf(db, parentUid, kidId);
+  await setKidGroups(db, parentUid, kid, []);
+  for (const g of await myGroups(db, kidId)) { // groups the parent has since left
+    await db.del('GROUP#' + g.gid, 'MEMBER#' + kidId);
+    await db.del('USER#' + kidId, 'GROUP#' + g.gid);
+  }
+  for (const i of await db.query('USER#' + kidId, 'ITEM#')) { await deletePhoto(i.imageKey); await db.del(i.pk, i.sk); }
+  await signOutKid(db, kidId);
+  for (const r of await db.query('USER#' + kidId)) await db.del(r.pk, r.sk);
+  await db.del('USER#' + parentUid, 'KID#' + kidId);
+  return { ok: true };
+}
+
+async function kidLoginCode(db, parentUid, kidId) {
+  await kidOf(db, parentUid, kidId);
+  for (let i = 0; i < 5; i++) {
+    const code = newCode() + newCode().slice(0, 2); // 8 characters
+    const exp = Date.now() + KID_CODE_MS;
+    try {
+      await db.put({ pk: 'KIDCODE#' + code, sk: 'META', kidId, exp, ttl: Math.floor(exp / 1000) + 3600 }, { ifNew: true });
+      return { code, expiresAt: new Date(exp).toISOString() };
+    } catch (e) { if (!(e instanceof Conflict)) throw e; }
+  }
+  fail(500, 'Try again');
+}
+
+async function kidLogin(db, b) {
+  const code = String(b.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const c = code.length === 8 && await db.get('KIDCODE#' + code, 'META');
+  if (!c || c.exp < Date.now()) fail(404, "That code didn't work. Ask your parent for a new one.");
+  await db.del('KIDCODE#' + code, 'META'); // one use only
+  const kid = await db.get('USER#' + c.kidId, 'PROFILE');
+  if (!kid) fail(404, 'That account was removed');
+  const token = crypto.randomBytes(32).toString('base64url');
+  const hash = hashToken(token);
+  await db.put({ pk: 'KIDTOKEN#' + hash, sk: 'META', kidId: kid.uid, createdAt: now() });
+  await db.put({ pk: 'USER#' + kid.uid, sk: 'TOKEN#' + hash, hash, createdAt: now() });
+  return { token, id: kid.uid, name: kid.name };
+}
+
+export async function kidClaims(db, token) {
+  if (!token) return null;
+  const t = await db.get('KIDTOKEN#' + hashToken(token), 'META');
+  if (!t) return null;
+  const p = await db.get('USER#' + t.kidId, 'PROFILE');
+  return p ? { sub: p.uid, name: p.name, kid: true, parentId: p.parentId } : null;
+}
+
+async function kidsRoute(db, claims, method, parts, b) {
+  const uid = claims.sub;
+  const [, kidId, y, z] = parts;
+  const is = (m, n) => method === m && parts.length === n;
+  if (is('GET', 1)) return { kids: await listKids(db, uid) };
+  if (is('POST', 1)) return createKid(db, claims, b);
+  await kidOf(db, uid, kidId);
+  if (is('PUT', 2)) return updateKid(db, uid, kidId, b);
+  if (is('DELETE', 2)) return deleteKid(db, uid, kidId);
+  if (y === 'login-code' && is('POST', 3)) return kidLoginCode(db, uid, kidId);
+  if (y === 'devices' && is('DELETE', 3)) { await signOutKid(db, kidId); return { ok: true }; }
+  // The parent edits the kid's list. Bought marks stay hidden: the list is shown as the kid sees it.
+  if (y === 'items') {
+    if (is('GET', 3)) return { items: await myItems(db, kidId) };
+    if (is('POST', 3)) return addItems(db, kidId, b);
+    if (is('PUT', 4)) return editItem(db, kidId, z, b);
+    if (is('DELETE', 4)) return deleteItem(db, kidId, z);
+  }
+  if (y === 'uploads' && is('POST', 3)) return newUpload(kidId, b);
+  fail(404, 'Not found');
+}
+
+// What a kid's own device may do: their list, lists in their groups, marking things bought.
+function kidAllowed(method, parts) {
+  const [a, , y] = parts;
+  if (a === 'me' || a === 'items' || a === 'uploads' || a === 'shopping') return !(a === 'me' && method !== 'GET');
+  if (a === 'groups') return (method === 'GET' && parts.length === 2) || y === 'lists';
+  return false;
+}
+
 // ---------- HTTP plumbing ----------
 function cors(event) {
   const o = event.headers?.origin || '';
@@ -415,6 +588,8 @@ async function route(db, claims, method, parts, b) {
   const uid = claims.sub;
   const [a, x, y, z, w, v] = parts;
   const is = (m, n) => method === m && parts.length === n;
+  if (claims.kid && !kidAllowed(method, parts)) fail(403, 'Ask your parent to do that');
+  if (a === 'kids') return kidsRoute(db, claims, method, parts, b);
   if (a === 'me' && is('GET', 1)) return getMe(db, claims);
   if (a === 'me' && is('PUT', 1)) return putMe(db, claims, b);
   if (a === 'items') {
@@ -447,12 +622,26 @@ async function route(db, claims, method, parts, b) {
 export const handler = async (event) => {
   if (event.requestContext?.eventType) return handleSocket(event);
   try {
-    const claims = event.requestContext?.authorizer?.jwt?.claims;
-    if (!claims?.sub) fail(401, 'Sign in first');
     const method = event.requestContext.http.method;
-    const parts = (event.rawPath || '/').split('/').filter(Boolean).map(decodeURIComponent);
+    let parts = (event.rawPath || '/').split('/').filter(Boolean).map(decodeURIComponent);
     const b = ['POST', 'PUT'].includes(method) ? parseBody(event) : {};
     const db = await store();
+    // /public/* and /kid/* skip the Cognito authorizer (see template.yaml) and are checked here.
+    if (parts[0] === 'public') {
+      if (parts[1] === 'kid-login' && method === 'POST' && parts.length === 2) return reply(event, 200, await kidLogin(db, b));
+      fail(404, 'Not found');
+    }
+    let claims;
+    if (parts[0] === 'kid') {
+      const auth = event.headers?.authorization || event.headers?.Authorization || '';
+      claims = await kidClaims(db, auth.replace(/^Kid\s+/i, ''));
+      if (!claims) fail(401, 'Signed out — ask your parent for a new sign-in code');
+      parts = parts.slice(1);
+    } else {
+      claims = event.requestContext?.authorizer?.jwt?.claims;
+      if (!claims?.sub) fail(401, 'Sign in first');
+      if (String(claims.sub).startsWith('kid_')) fail(401, 'Sign in first');
+    }
     return reply(event, 200, await route(db, claims, method, parts, b));
   } catch (e) {
     if (e instanceof HttpError) return reply(event, e.code, { error: e.message });

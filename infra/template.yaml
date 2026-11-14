@@ -188,6 +188,22 @@ Resources:
   RouteDelete:
     Type: AWS::ApiGatewayV2::Route
     Properties: { ApiId: !Ref HttpApi, RouteKey: 'DELETE /{proxy+}', AuthorizationType: JWT, AuthorizerId: !Ref HttpAuthorizer, Target: !Sub 'integrations/${HttpIntegration}' }
+  # Kid devices and the kid sign-in step use their own tokens, checked in the Lambda.
+  KidGet:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'GET /kid/{proxy+}', AuthorizationType: NONE, Target: !Sub 'integrations/${HttpIntegration}' }
+  KidPost:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'POST /kid/{proxy+}', AuthorizationType: NONE, Target: !Sub 'integrations/${HttpIntegration}' }
+  KidPut:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'PUT /kid/{proxy+}', AuthorizationType: NONE, Target: !Sub 'integrations/${HttpIntegration}' }
+  KidDelete:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'DELETE /kid/{proxy+}', AuthorizationType: NONE, Target: !Sub 'integrations/${HttpIntegration}' }
+  PublicPost:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: { ApiId: !Ref HttpApi, RouteKey: 'POST /public/{proxy+}', AuthorizationType: NONE, Target: !Sub 'integrations/${HttpIntegration}' }
   HttpStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
