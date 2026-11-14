@@ -86,6 +86,11 @@ textarea { min-height: 90px; resize: vertical; }
 .fields-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 480px) { .fields-2 { grid-template-columns: 1fr; } }
 input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--pine); }
+.kind-choice { display: grid; gap: 8px; }
+.kind-option { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid #d9cdbb; border-radius: 12px; background: #fff; cursor: pointer; font-weight: 400; margin: 0; }
+.kind-option:has(input:checked) { border-color: var(--pine); background: #eef4f0; box-shadow: 0 0 0 1px var(--pine); }
+.kind-option input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--pine); flex: none; }
+.kind-option > span { display: flex; flex-direction: column; gap: 2px; }
 .check { display: flex; gap: 10px; align-items: center; font-weight: 500; }
 
 /* landing */

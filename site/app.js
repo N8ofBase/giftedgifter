@@ -158,18 +158,18 @@
     const groups = me.groups;
     paint(
       h('div', { class: 'row between' },
-        h('div', {}, h('h1', {}, `Hi, ${me.name.split(' ')[0]}`), h('p', { class: 'muted' }, 'Your gift exchange groups ', h('span', { class: 'live-dot' + (live.sock && live.sock.readyState === 1 ? ' on' : ''), title: 'Live updates' })))),
+        h('div', {}, h('h1', {}, `Hi, ${me.name.split(' ')[0]}`), h('p', { class: 'muted' }, 'Your groups ', h('span', { class: 'live-dot' + (live.sock && live.sock.readyState === 1 ? ' on' : ''), title: 'Live updates' })))),
       groups.length
         ? h('div', { class: 'grid' }, groups.map((g) => h('a', { class: 'card group-card', href: '#/g/' + g.id },
             h('h3', {}, g.name),
             h('div', { class: 'row' },
               h('span', { class: 'pill' }, `${g.members} ${g.members === 1 ? 'person' : 'people'}`),
               g.date && h('span', { class: 'pill gold' }, countdown(g.date)),
-              g.drawn ? h('span', { class: 'pill green' }, 'Names drawn') : null,
+              g.kind === 'lists' ? h('span', { class: 'pill blue' }, 'Shared lists') : g.drawn ? h('span', { class: 'pill green' }, 'Names drawn') : null,
               g.admin ? h('span', { class: 'pill' }, 'Organizer') : null))))
         : h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '🎄'), h('p', {}, 'No groups yet. Start one for your family or friends, or join with an invite code.')),
       h('div', { class: 'section grid' },
-        h('div', { class: 'card stack' }, h('h2', {}, 'Start a group'), h('p', { class: 'muted small' }, 'You\'ll be the organizer — you can invite people and draw names.'), h('button', { onclick: newGroupModal }, '+ New group')),
+        h('div', { class: 'card stack' }, h('h2', {}, 'Start a group'), h('p', { class: 'muted small' }, 'A gift exchange with a name draw, or just a family or friends group that shares lists.'), h('button', { onclick: newGroupModal }, '+ New group')),
         joinCard()),
       h('div', { class: 'section card row between' },
         h('div', {}, h('h3', {}, 'Your wish list'), h('p', { class: 'muted small', style: 'margin:0' }, 'One list, shared with everyone in your groups. Even link your Elfster or Amazon lists.')),
@@ -211,16 +211,29 @@
     }) }, 'Create group')]);
   }
   function groupFields(g) {
+    let kind = g.kind || 'exchange';
     const name = h('input', { value: g.name || '', placeholder: 'Sloan Family Christmas', maxlength: 60 });
     const date = h('input', { type: 'date', value: g.date || '' });
     const budget = h('input', { value: g.budget || '', placeholder: '$50', maxlength: 30 });
     const notes = h('textarea', { placeholder: 'Anything everyone should know — where you\'re meeting, theme, etc.', maxlength: 600 }, g.notes || '');
+    const exchangeOnly = h('div', { class: 'fields-2 field' }, h('div', {}, h('label', {}, 'Exchange date'), date), h('div', {}, h('label', {}, 'Budget'), budget));
+    const choice = (value, title, desc) => {
+      const radio = h('input', { type: 'radio', name: 'gg-kind', value, checked: kind === value, onchange: () => { kind = value; sync(); } });
+      return h('label', { class: 'kind-option' }, radio, h('span', {}, h('strong', {}, title), h('span', { class: 'muted small' }, desc)));
+    };
+    const sync = () => { exchangeOnly.hidden = kind !== 'exchange'; name.placeholder = kind === 'exchange' ? 'Sloan Family Christmas' : 'The Sloan Family'; };
+    const el = h('div', {},
+      h('div', { class: 'field kind-choice', role: 'radiogroup', 'aria-label': 'Kind of group' },
+        choice('exchange', 'Gift exchange', 'Draw names — everyone gets one person to shop for.'),
+        choice('lists', 'Share lists', 'No draw. Everyone sees each other\'s lists and marks off what they buy.')),
+      h('div', { class: 'field' }, h('label', {}, 'Group name'), name),
+      exchangeOnly,
+      h('div', { class: 'field' }, h('label', {}, 'Notes'), notes));
+    sync();
     return {
-      el: h('div', {},
-        h('div', { class: 'field' }, h('label', {}, 'Group name'), name),
-        h('div', { class: 'fields-2 field' }, h('div', {}, h('label', {}, 'Exchange date'), date), h('div', {}, h('label', {}, 'Budget'), budget)),
-        h('div', { class: 'field' }, h('label', {}, 'Notes'), notes)),
-      value: () => ({ name: name.value, date: date.value, budget: budget.value, notes: notes.value }),
+      el,
+      kind: () => kind,
+      value: () => ({ kind, name: name.value, notes: notes.value, ...(kind === 'exchange' ? { date: date.value, budget: budget.value } : {}) }),
     };
   }
 
@@ -255,7 +268,10 @@
         g.budget && h('span', { class: 'pill' }, 'Budget ' + g.budget),
         h('span', { class: 'pill' }, `${g.members.length} people`)),
       g.notes && h('p', { class: 'muted', style: 'margin-top:12px;white-space:pre-wrap' }, g.notes),
-      h('div', { class: 'section' }, g.giftingTo ? assignment(g) : h('div', { class: 'card' },
+      g.kind === 'lists' ? h('div', { class: 'section card' },
+        h('h3', {}, 'Shared lists'),
+        h('p', { class: 'muted small', style: 'margin:0' }, 'Everyone here can see each other\'s lists. Mark things off when you buy them — the person the list belongs to never sees what\'s been bought.'))
+      : h('div', { class: 'section' }, g.giftingTo ? assignment(g) : h('div', { class: 'card' },
         h('h3', {}, g.drawnAt ? 'You joined after the draw' : 'Names haven\'t been drawn yet'),
         h('p', { class: 'muted small', style: 'margin:0' }, g.drawnAt ? 'Ask the organizer to redraw so you\'re included.' : (g.admin ? 'When everyone has joined, draw names below.' : 'The organizer will draw names once everyone has joined. You can still browse lists and mark things bought.')))),
       h('div', { class: 'section card' },
@@ -288,6 +304,11 @@
   }
 
   function adminPanel(g, notInDraw) {
+    if (g.kind === 'lists') {
+      return h('details', { class: 'section card admin' },
+        h('summary', {}, 'Organizer tools'),
+        h('div', { class: 'stack', style: 'margin-top:14px' }, groupDetailButtons(g)));
+    }
     const rules = g.rules || { households: {}, exclusions: [], noPairs: false };
     const labels = [...new Set(Object.values(rules.households))];
     const dl = h('datalist', { id: 'hh-labels' }, labels.map((l) => h('option', { value: l })));
@@ -337,19 +358,25 @@
               h('p', { class: 'small muted' }, g.members.length < 3 ? 'You need at least 3 people.' : `Ready with ${g.members.length} people. Your rules are saved first.`),
               h('button', { class: 'gold', disabled: g.members.length < 3, onclick: () => confirmDraw(false) }, '🎩 Draw names')),
         h('h3', { style: 'margin-top:20px' }, 'Group details'),
-        h('div', { class: 'row' },
-          h('button', { class: 'ghost small', onclick: () => editGroupModal(g) }, 'Edit details'),
-          h('button', { class: 'ghost small', onclick: () => removePeopleModal(g) }, 'Remove someone'),
-          h('button', { class: 'danger-text', onclick: () => confirm(`Delete "${g.name}" for everyone? Lists stay, but the group and draw are gone.`) && act(async () => { await api('DELETE', '/groups/' + g.id); location.hash = '#/'; }, 'Group deleted') }, 'Delete group'))));
+        groupDetailButtons(g)));
 
     function confirmDraw(again) {
       if (!confirm(again ? 'Redraw? Everyone gets a new match — let people know!' : `Draw names for ${g.members.length} people now?`)) return;
       act(async () => { await saveRules(); await api('POST', `/groups/${g.id}/draw`); currentRender(true); }, 'Names drawn! 🎉');
     }
   }
+  function groupDetailButtons(g) {
+    return h('div', { class: 'row' },
+      h('button', { class: 'ghost small', onclick: () => editGroupModal(g) }, 'Edit details'),
+      h('button', { class: 'ghost small', onclick: () => removePeopleModal(g) }, 'Remove someone'),
+      h('button', { class: 'danger-text', onclick: () => confirm(`Delete "${g.name}" for everyone? Everyone's lists stay, but the group${g.kind === 'lists' ? '' : ' and draw'} are gone.`) && act(async () => { await api('DELETE', '/groups/' + g.id); location.hash = '#/'; }, 'Group deleted') }, 'Delete group'));
+  }
   function editGroupModal(g) {
     const f = groupFields(g);
-    modal('Edit group', f.el, (close) => [h('button', { onclick: () => act(async () => { await api('PUT', '/groups/' + g.id, f.value()); close(); currentRender(true); }, 'Saved') }, 'Save')]);
+    modal('Edit group', f.el, (close) => [h('button', { onclick: () => {
+      if (g.drawnAt && f.kind() === 'lists' && !confirm('Switch to sharing lists only? This clears the name draw for everyone.')) return;
+      act(async () => { await api('PUT', '/groups/' + g.id, f.value()); me = await api('GET', '/me'); close(); currentRender(true); }, 'Saved');
+    } }, 'Save')]);
   }
   function removePeopleModal(g) {
     const others = g.members.filter((m) => m.id !== g.ownerId);

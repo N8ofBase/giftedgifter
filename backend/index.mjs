@@ -116,7 +116,7 @@ async function getMe(db, claims) {
     const meta = await db.get('GROUP#' + g.gid, 'META');
     if (!meta) continue;
     const ms = await members(db, g.gid);
-    groups.push({ id: meta.id, name: meta.name, date: meta.date, budget: meta.budget, members: ms.length, drawn: !!meta.drawnAt, admin: meta.ownerId === claims.sub });
+    groups.push({ id: meta.id, name: meta.name, kind: kindOf(meta), date: meta.date, budget: meta.budget, members: ms.length, drawn: !!meta.drawnAt, admin: meta.ownerId === claims.sub });
   }
   groups.sort((a, b) => (a.date || '9') < (b.date || '9') ? -1 : 1);
   return { id: p.uid, name: p.name, email: p.email, groups };
@@ -214,12 +214,15 @@ async function createGroup(db, claims, b) {
     try { await db.put({ pk: 'CODE#' + code, sk: 'META', gid: id }, { ifNew: true }); break; }
     catch (e) { if (!(e instanceof Conflict) || i === 4) throw e; }
   }
-  const meta = { pk: 'GROUP#' + id, sk: 'META', id, name, code, ownerId: p.uid, budget: line(b.budget, 30), date: cleanDate(b.date), notes: text(b.notes, 600), rules: { households: {}, exclusions: [], noPairs: false }, drawnAt: null, createdAt: now(), v: 1 };
+  const meta = { pk: 'GROUP#' + id, sk: 'META', id, name, code, kind: cleanKind(b.kind), ownerId: p.uid, budget: line(b.budget, 30), date: cleanDate(b.date), notes: text(b.notes, 600), rules: { households: {}, exclusions: [], noPairs: false }, drawnAt: null, createdAt: now(), v: 1 };
   await db.put(meta);
   await join(db, p, meta);
   return { id };
 }
 const cleanDate = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(String(d || '')) ? d : '');
+// 'exchange' = draw names; 'lists' = just share wish lists (family, friends), no draw.
+const cleanKind = (k) => (k === 'lists' ? 'lists' : 'exchange');
+const kindOf = (meta) => meta.kind || 'exchange';
 
 async function join(db, p, meta) {
   await db.put({ pk: 'GROUP#' + meta.id, sk: 'MEMBER#' + p.uid, uid: p.uid, name: p.name, joinedAt: now() });
@@ -251,7 +254,7 @@ async function getGroup(db, uid, gid) {
   const drawnIds = meta.drawnAt ? new Set((await db.query('GROUP#' + gid, 'DRAW#')).map((d) => d.giver)) : null;
   const byId = Object.fromEntries(ms.map((m) => [m.uid, m]));
   return {
-    id: meta.id, name: meta.name, code: meta.code, budget: meta.budget, date: meta.date, notes: meta.notes,
+    id: meta.id, name: meta.name, kind: kindOf(meta), code: meta.code, budget: meta.budget, date: meta.date, notes: meta.notes,
     admin, ownerId: meta.ownerId, drawnAt: meta.drawnAt,
     members: ms.map((m) => ({ id: m.uid, name: m.name, items: counts[m.uid] || 0, inDraw: drawnIds ? drawnIds.has(m.uid) : null }))
       .sort((a, b) => a.name.localeCompare(b.name)),
@@ -268,6 +271,13 @@ async function putGroup(db, uid, gid, b) {
   if (b.budget !== undefined) meta.budget = line(b.budget, 30);
   if (b.date !== undefined) meta.date = cleanDate(b.date);
   if (b.notes !== undefined) meta.notes = text(b.notes, 600);
+  if (b.kind !== undefined && cleanKind(b.kind) !== kindOf(meta)) {
+    meta.kind = cleanKind(b.kind);
+    if (meta.kind === 'lists' && meta.drawnAt) { // a list-sharing group has no draw
+      for (const d of await db.query('GROUP#' + gid, 'DRAW#')) await db.del(d.pk, d.sk);
+      meta.drawnAt = null;
+    }
+  }
   if (b.rules !== undefined) {
     const ids = new Set((await members(db, gid)).map((m) => m.uid));
     const hh = {};
@@ -347,6 +357,7 @@ async function setBought(db, claims, gid, owner, id, on) {
 async function runDraw(db, uid, gid) {
   const meta = await groupFor(db, gid, uid);
   if (meta.ownerId !== uid) fail(403, 'Only the organizer can draw names');
+  if (kindOf(meta) === 'lists') fail(400, 'This group just shares lists — switch it to a gift exchange to draw names');
   const ms = await members(db, gid);
   if (ms.length < 3) fail(400, 'You need at least 3 people to draw names');
   const result = drawNames(ms.map((m) => m.uid), meta.rules || {});
