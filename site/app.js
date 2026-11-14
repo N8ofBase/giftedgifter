@@ -413,7 +413,8 @@
       i.priority === 4 && h('span', { class: 'pill blue' }, 'Parent suggestion'),
       i.priority === 1 && h('span', { class: 'pill gold' }, 'Really want'),
       i.price && h('span', { class: 'pill' }, i.price),
-      i.qty > 1 && h('span', { class: 'pill' }, `Wants ${i.qty}`));
+      i.qty > 1 && h('span', { class: 'pill' }, `Wants ${i.qty}`),
+      ctx.mine && ctx.groups && ctx.groups.length > 1 && i.groups && i.groups.length ? audienceTag(i.groups, ctx.groups) : null);
     const actions = h('div', { class: 'actions' });
     if (ctx.mine) {
       actions.append(h('button', { class: 'ghost small', onclick: () => itemModal(i) }, 'Edit'),
@@ -432,23 +433,70 @@
         actions));
   }
 
+  function audienceTag(ids, groups) {
+    const names = groups.filter((g) => ids.includes(g.id)).map((g) => g.name);
+    return names.length ? h('span', { class: 'pill aud' }, 'Only: ' + names.join(', ')) : h('span', { class: 'pill berry' }, 'Not shared with any group');
+  }
+
   // ---------- my list ----------
+  // My list has a tab per group: each item is shared with all your groups, or only the ones you pick.
+  let listTab = 'all';
+  const visibleIn = (i, gid) => !(i.groups && i.groups.length) || i.groups.includes(gid);
   async function viewMyList() {
-    const { items } = await api('GET', '/items');
+    const [{ items }, prof] = await Promise.all([api('GET', '/items'), api('GET', '/me')]);
+    me = prof;
+    const groups = me.groups;
+    if (listTab !== 'all' && !groups.some((g) => g.id === listTab)) listTab = 'all';
+    const tabGroup = groups.find((g) => g.id === listTab);
+    const shown = tabGroup ? items.filter((i) => visibleIn(i, tabGroup.id)) : items;
+    const defaults = tabGroup ? [tabGroup.id] : [];
+    const add = () => itemModal(null, defaults);
+    const imp = () => importModal(defaults);
+    const tabs = groups.length > 1 && h('div', { class: 'list-tabs', role: 'tablist' },
+      [{ id: 'all', name: 'Everything' }, ...groups].map((g) => h('button', {
+        role: 'tab', 'aria-selected': String(listTab === g.id), class: listTab === g.id ? 'on' : '',
+        onclick: () => { listTab = g.id; viewMyList(); },
+      }, g.name)));
     paint(
       h('div', { class: 'row between' },
-        h('div', {}, h('h1', {}, 'My wish list'), h('p', { class: 'muted', style: 'margin:0' }, 'Everyone in your groups can see this. You\'ll never see what\'s been bought.')),
-        h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: importModal }, 'Import'), h('button', { onclick: () => itemModal(null) }, '+ Add something'))),
-      h('div', { class: 'section' }, items.length
-        ? h('div', { class: 'items' }, items.map((i) => itemCard(i, { mine: true })))
+        h('div', {}, h('h1', {}, 'My wish list'), h('p', { class: 'muted', style: 'margin:0' },
+          tabGroup ? `What people in ${tabGroup.name} see. Things you add here go to this group only.` : 'Everything on your list. You\'ll never see what\'s been bought.')),
+        h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: imp }, 'Import'), h('button', { onclick: add }, '+ Add something'))),
+      tabs,
+      h('div', { class: 'section' }, shown.length
+        ? h('div', { class: 'items' }, shown.map((i) => itemCard(i, { mine: true, groups })))
         : h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '✨'),
-            h('p', {}, 'Add what you\'d love to get. Type an idea, paste a link from any store, or add a photo.'),
-            h('div', { class: 'row', style: 'justify-content:center' }, h('button', { onclick: () => itemModal(null) }, '+ Add something'), h('button', { class: 'ghost', onclick: importModal }, 'Import a list')))));
+            h('p', {}, tabGroup ? `Nothing shared with ${tabGroup.name} yet.` : 'Add what you\'d love to get. Type an idea, paste a link from any store, or add a photo.'),
+            h('div', { class: 'row', style: 'justify-content:center' }, h('button', { onclick: add }, '+ Add something'), h('button', { class: 'ghost', onclick: imp }, 'Import a list')))));
+  }
+
+  // "Who can see this": all my groups, or only some.
+  function audiencePicker(initial) {
+    const groups = (me && me.groups) || [];
+    let picked = new Set(initial || []);
+    let all = picked.size === 0;
+    if (groups.length < 2) return { el: null, value: () => [] };
+    const boxes = h('div', { class: 'aud-boxes' });
+    const drawBoxes = () => boxes.replaceChildren(...groups.map((g) => h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: picked.has(g.id), onchange: (e) => { e.target.checked ? picked.add(g.id) : picked.delete(g.id); } }), g.name)));
+    drawBoxes();
+    boxes.hidden = all;
+    const radio = (val, label) => h('label', { class: 'check' }, h('input', { type: 'radio', name: 'gg-aud', checked: all === val, onchange: () => { all = val; boxes.hidden = all; } }), label);
+    return {
+      el: h('div', { class: 'field audience' }, h('label', {}, 'Who can see this'), radio(true, 'All my groups'), radio(false, 'Only these groups:'), boxes),
+      value: () => {
+        if (all) return [];
+        const v = [...picked];
+        if (!v.length) throw new Error('Pick at least one group, or choose All my groups');
+        return v;
+      },
+    };
   }
 
   // Item editor: typed idea, link, photo (pick / drop / paste), price, priority, notes.
-  function itemModal(existing) {
+  function itemModal(existing, defaultGroups) {
     const i = existing || {};
+    const aud = audiencePicker(existing ? i.groups : defaultGroups);
     let imageKey = i.imageKey || '';
     const title = h('input', { value: i.title || '', placeholder: 'What would you like?', maxlength: 140 });
     const url = h('input', { type: 'url', value: i.url || '', placeholder: 'A product, or your whole Elfster or Amazon list', inputmode: 'url' });
@@ -469,10 +517,13 @@
       h('div', { class: 'field' }, h('label', {}, 'Photo'), pic.el),
       h('div', { class: 'fields-2 field' }, h('div', {}, h('label', {}, 'Price'), price), h('div', {}, h('label', {}, 'How much you want it'), priority)),
       h('div', { class: 'fields-2 field' }, h('div', {}, h('label', {}, 'How many'), qty), h('div')),
-      h('div', { class: 'field' }, h('label', {}, 'Notes'), notes));
+      h('div', { class: 'field' }, h('label', {}, 'Notes'), notes),
+      aud.el);
     const close = modal(existing ? 'Edit item' : 'Add to your list', body, (closeIt) => [h('button', { onclick: async (e) => {
       if (pic.busy()) return toast('Hang on — the photo is still uploading');
-      const data = { title: title.value, url: url.value.trim(), price: price.value, priority: Number(priority.value), qty: Math.max(1, Math.min(20, parseInt(qty.value, 10) || 1)), notes: notes.value, imageKey };
+      let groups;
+      try { groups = aud.value(); } catch (err) { return toast(err.message, true); }
+      const data = { title: title.value, url: url.value.trim(), price: price.value, priority: Number(priority.value), qty: Math.max(1, Math.min(20, parseInt(qty.value, 10) || 1)), notes: notes.value, imageKey, groups };
       if (data.url && !/^https?:\/\//i.test(data.url)) data.url = 'https://' + data.url;
       e.target.disabled = true;
       const ok = await act(() => existing ? api('PUT', '/items/' + i.id, data) : api('POST', '/items', data), existing ? 'Saved' : 'Added to your list');
@@ -575,8 +626,9 @@
     }).filter((x) => x.title || x.url);
   }
 
-  function importModal() {
+  function importModal(defaultGroups) {
     let rows = [];
+    const aud = audiencePicker(defaultGroups);
     const ta = h('textarea', { style: 'min-height:150px', placeholder: 'One per line, for example:\nCozy wool socks, size L\nKindle Paperwhite - https://www.amazon.com/…\nhttps://www.etsy.com/listing/…' });
     const file = h('input', { type: 'file', accept: '.csv,.txt,text/csv,text/plain' });
     const preview = h('div');
@@ -601,12 +653,15 @@
       h('p', { class: 'muted small' }, 'Paste a list from your notes, an email, or another wish list site — links are picked up automatically. Or upload a CSV with title, link, price and notes columns.'),
       h('div', { class: 'field' }, ta),
       h('div', { class: 'field' }, h('label', {}, 'Or upload a file'), file),
-      h('div', { class: 'field' }, count, preview));
+      h('div', { class: 'field' }, count, preview),
+      aud.el);
     modal('Import a list', body, (close) => [h('button', { onclick: async (e) => {
       const chosen = rows.filter((r) => r.on && (r.title.trim() || r.url)).map(({ title, url, price, notes }) => ({ title, url, price, notes }));
       if (!chosen.length) return toast('Nothing to import yet', true);
       e.target.disabled = true;
-      const ok = await act(() => api('POST', '/items', { items: chosen }), `Imported ${chosen.length} item${chosen.length === 1 ? '' : 's'}`);
+      let groups;
+      try { groups = aud.value(); } catch (err) { return toast(err.message, true); }
+      const ok = await act(() => api('POST', '/items', { items: chosen, groups }), `Imported ${chosen.length} item${chosen.length === 1 ? '' : 's'}`);
       e.target.disabled = false;
       if (ok) { close(); currentRender(true); }
     } }, 'Import')]);

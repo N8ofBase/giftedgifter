@@ -67,7 +67,7 @@ All routes need a Cognito ID token (`Authorization: Bearer …`).
 | Route | |
 |---|---|
 | `GET /me` · `PUT /me {name}` | profile + your groups |
-| `GET /items` · `POST /items {item}` or `{items:[…]}` · `PUT/DELETE /items/{id}` | your list |
+| `GET /items` · `POST /items {item}` or `{items:[…], groups}` · `PUT/DELETE /items/{id}` | your list (`groups: []` = all your groups, else only those group ids) |
 | `POST /uploads {contentType}` | presigned photo upload → `{key, uploadUrl}` |
 | `GET /shopping` | what you've marked bought |
 | `POST /groups` · `POST /join {code}` | create / join |

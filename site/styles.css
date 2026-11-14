@@ -91,6 +91,12 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--pine); }
 .kind-option:has(input:checked) { border-color: var(--pine); background: #eef4f0; box-shadow: 0 0 0 1px var(--pine); }
 .kind-option input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--pine); flex: none; }
 .kind-option > span { display: flex; flex-direction: column; gap: 2px; }
+.list-tabs { display: flex; gap: 6px; overflow-x: auto; margin-top: 18px; padding-bottom: 4px; scrollbar-width: none; }
+.list-tabs button { flex: none; background: #ece3d3; color: var(--muted); border-radius: 999px; min-height: 38px; padding: 6px 14px; font-size: 14px; }
+.list-tabs button.on { background: var(--pine); color: #fff; }
+.pill.aud { background: #e7eee9; color: var(--pine); }
+.audience .check { margin: 6px 0; }
+.aud-boxes { margin-left: 30px; }
 .check { display: flex; gap: 10px; align-items: center; font-weight: 500; }
 
 /* landing */

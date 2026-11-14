@@ -96,8 +96,19 @@ async function audienceOf(db, uid) {
   return [...out];
 }
 
+// Which groups can see an item: [] = all of the owner's groups, else just these group ids.
+const visibleIn = (i, gid) => !(i.groups && i.groups.length) || i.groups.includes(gid);
+async function cleanGroups(db, uid, groups) {
+  if (!Array.isArray(groups) || !groups.length) return [];
+  const mine = new Set((await myGroups(db, uid)).map((g) => g.gid));
+  const out = [...new Set(groups.filter((g) => typeof g === 'string' && mine.has(g)))];
+  if (!out.length) fail(400, "Pick at least one of your groups, or share with all of them");
+  return out;
+}
+
 function itemOut(i, viewer) {
   const o = { id: i.id, title: i.title, url: i.url, price: i.price, notes: i.notes, priority: i.priority, qty: i.qty || 1, createdAt: i.createdAt, imageKey: i.imageKey || '' };
+  if (viewer === i.owner) o.groups = i.groups || [];
   if (i.imageKey) o.imageUrl = presign('GET', i.imageKey, 6 * 3600);
   // The owner never learns what was bought. Everyone else sees it so nobody double-buys.
   if (viewer !== i.owner && i.boughtBy) o.bought = { by: i.boughtName, mine: i.boughtBy === viewer, at: i.boughtAt };
@@ -145,12 +156,13 @@ async function addItems(db, uid, b) {
   const have = (await db.query('USER#' + uid, 'ITEM#')).length;
   const items = raw.map((r) => cleanItem(r || {}, uid)).filter(Boolean);
   if (!items.length) fail(400, 'Give it a name, a link or a photo');
+  const groups = await cleanGroups(db, uid, b.groups);
   if (have + items.length > MAX_ITEMS) fail(400, `Lists hold up to ${MAX_ITEMS} things`);
   const t = Date.now();
   const saved = [];
   for (const [k, it] of items.entries()) {
     const id = newId();
-    const row = { pk: 'USER#' + uid, sk: 'ITEM#' + id, id, owner: uid, ...it, createdAt: new Date(t + k).toISOString(), v: 1 };
+    const row = { pk: 'USER#' + uid, sk: 'ITEM#' + id, id, owner: uid, ...it, groups, createdAt: new Date(t + k).toISOString(), v: 1 };
     await db.put(row);
     saved.push(itemOut(row, uid));
   }
@@ -164,7 +176,8 @@ async function editItem(db, uid, id, b) {
   const it = cleanItem({ ...row, ...b, imageKey: b.imageKey !== undefined ? b.imageKey : row.imageKey }, uid);
   if (!it) fail(400, 'Give it a name, a link or a photo');
   if (row.imageKey && row.imageKey !== it.imageKey) await deletePhoto(row.imageKey);
-  const next = { ...row, ...it, v: row.v + 1, updatedAt: now() };
+  const groups = b.groups !== undefined ? await cleanGroups(db, uid, b.groups) : (row.groups || []);
+  const next = { ...row, ...it, groups, v: row.v + 1, updatedAt: now() };
   try { await db.put(next, { ifVersion: row.v }); } catch (e) { if (e instanceof Conflict) fail(409, 'Changed somewhere else — try again'); throw e; }
   if (row.boughtBy) {
     const s = await db.get('USER#' + row.boughtBy, `BOUGHT#${uid}#${id}`);
@@ -249,7 +262,7 @@ async function getGroup(db, uid, gid) {
   const ms = await members(db, gid);
   const admin = meta.ownerId === uid;
   const counts = {};
-  await Promise.all(ms.map(async (m) => { counts[m.uid] = (await db.query('USER#' + m.uid, 'ITEM#')).length; }));
+  await Promise.all(ms.map(async (m) => { counts[m.uid] = (await db.query('USER#' + m.uid, 'ITEM#')).filter((i) => visibleIn(i, gid)).length; }));
   const draw = meta.drawnAt ? await db.get('GROUP#' + gid, 'DRAW#' + uid) : null;
   const drawnIds = meta.drawnAt ? new Set((await db.query('GROUP#' + gid, 'DRAW#')).map((d) => d.giver)) : null;
   const byId = Object.fromEntries(ms.map((m) => [m.uid, m]));
@@ -319,7 +332,7 @@ async function memberList(db, uid, gid, who) {
   await groupFor(db, gid, uid);
   const m = await db.get('GROUP#' + gid, 'MEMBER#' + who);
   if (!m) fail(404, 'Not in this group');
-  const items = (await db.query('USER#' + who, 'ITEM#')).sort(sortItems).map((i) => itemOut(i, uid));
+  const items = (await db.query('USER#' + who, 'ITEM#')).filter((i) => visibleIn(i, gid)).sort(sortItems).map((i) => itemOut(i, uid));
   return { id: who, name: m.name, items, yours: who === uid };
 }
 
@@ -329,7 +342,7 @@ async function setBought(db, claims, gid, owner, id, on) {
   if (owner === uid) fail(400, "That's your own list — no peeking!");
   if (!(await db.get('GROUP#' + gid, 'MEMBER#' + owner))) fail(404, 'Not in this group');
   const row = await db.get('USER#' + owner, 'ITEM#' + id);
-  if (!row) fail(404, 'That item was removed');
+  if (!row || !visibleIn(row, gid)) fail(404, 'That item was removed');
   const p = await profile(db, claims);
   if (on) {
     if (row.boughtBy && row.boughtBy !== uid) fail(409, `${row.boughtName} already bought this`);
