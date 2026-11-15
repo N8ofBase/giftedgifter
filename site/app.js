@@ -569,11 +569,34 @@
     // A pasted link in the title box moves to the link box.
     title.addEventListener('paste', (e) => {
       const t = (e.clipboardData || {}).getData && e.clipboardData.getData('text');
-      if (t && /^https?:\/\/\S+$/.test(t.trim()) && !url.value) { e.preventDefault(); url.value = t.trim(); if (!title.value) title.placeholder = 'Name it (or leave blank to use the link)'; }
+      if (t && /^https?:\/\/\S+$/.test(t.trim()) && !url.value) { e.preventDefault(); url.value = t.trim(); if (!title.value) title.placeholder = 'Name it (or leave blank to use the link)'; lookup(); }
     });
+    // Paste a link → look up the page and fill in what's still empty.
+    const lookupNote = h('div', { class: 'small muted', 'aria-live': 'polite', style: 'margin-top:6px' });
+    let looked = i.url || '', autoTitle = false, lookupTimer;
+    title.addEventListener('input', () => { autoTitle = false; });
+    async function lookup() {
+      let u = url.value.trim();
+      if (u && !/^https?:\/\//i.test(u) && /\.[a-z]{2,}/i.test(u)) u = 'https://' + u;
+      if (!/^https?:\/\/\S+\.\S+/.test(u) || u === looked) return;
+      looked = u;
+      lookupNote.textContent = 'Looking up the link…';
+      try {
+        const r = await api('POST', listBase() + '/unfurl', { url: u, photo: !pic.hasPhoto() });
+        if (looked !== u) return; // they pasted something else meanwhile
+        const filled = [];
+        if (r.title && (!title.value.trim() || autoTitle)) { title.value = r.title; autoTitle = true; filled.push('name'); }
+        if (r.price && !price.value.trim()) { price.value = r.price; filled.push('price'); }
+        if (r.imageKey && !pic.hasPhoto()) { pic.setFound(r.imageUrl, r.imageKey); filled.push('photo'); }
+        lookupNote.textContent = r.found && filled.length ? `Filled in the ${filled.join(', ')} from the page — change anything you like.`
+          : r.found ? 'Found the page.' : filled.includes('name') ? "That store didn't let us read the page, so the name is a guess from the link — check it." : "That store didn't let us read the page — give it a name yourself.";
+      } catch (e) { lookupNote.textContent = "Couldn't look up that link — give it a name yourself."; }
+    }
+    url.addEventListener('input', () => { clearTimeout(lookupTimer); lookupTimer = setTimeout(lookup, 700); });
+    url.addEventListener('blur', () => { clearTimeout(lookupTimer); lookup(); });
     const body = h('div', {},
       h('div', { class: 'field' }, h('label', {}, 'Item'), title),
-      h('div', { class: 'field' }, h('label', {}, 'Link'), url),
+      h('div', { class: 'field' }, h('label', {}, 'Link'), url, lookupNote),
       h('div', { class: 'field' }, h('label', {}, 'Photo'), pic.el),
       h('div', { class: 'fields-2 field' }, h('div', {}, h('label', {}, 'Price'), price), h('div', {}, h('label', {}, 'How much you want it'), priority)),
       h('div', { class: 'fields-2 field' }, h('div', {}, h('label', {}, 'How many'), qty), h('div')),
@@ -625,7 +648,10 @@
       } catch (e) { toast(e.message, true); hint.textContent = 'Tap to choose, drop, or paste a photo'; show(currentUrl); }
       busy = false;
     }
-    return { el: h('div', {}, zone, file), take, busy: () => busy };
+    // A photo found from a pasted link (already saved on the server).
+    const setFound = (src, key) => { show(src); onKey(key); hint.textContent = 'Photo from the link — tap to change'; };
+    const hasPhoto = () => !remove.hidden;
+    return { el: h('div', {}, zone, file), take, busy: () => busy, setFound, hasPhoto };
   }
   // Photos are resized in the browser (max 1200px JPEG) so uploads stay small.
   async function shrink(f) {

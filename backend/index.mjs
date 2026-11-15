@@ -15,6 +15,7 @@ import { store, Conflict } from './store.mjs';
 import { drawNames } from './draw.mjs';
 import { handleSocket, notify } from './live.mjs';
 import { presign, deletePhoto } from './s3.mjs';
+import { unfurl, fetchImage } from './unfurl.mjs';
 
 const ORIGINS = (process.env.ALLOW_ORIGINS || '*').split(',');
 const MAX_ITEMS = 200;
@@ -208,6 +209,26 @@ function newUpload(uid, b) {
   const type = ['image/jpeg', 'image/png', 'image/webp'].includes(b.contentType) ? b.contentType : 'image/jpeg';
   const key = `img/${uid}/${newId()}.${type.split('/')[1].replace('jpeg', 'jpg')}`;
   return { key, uploadUrl: presign('PUT', key, 600, type), contentType: type };
+}
+
+// Paste a link → fill in the item's name, price and photo from the page.
+async function lookupLink(uid, b) {
+  const url = cleanUrl(b.url);
+  if (!url) fail(400, "That doesn't look like a link");
+  const within = (ms, work) => Promise.race([work, new Promise((r) => setTimeout(() => r(null), ms))]); // stay under the Lambda's 15 s
+  const info = (await within(8000, unfurl(url))) || {};
+  const out = { title: info.title || titleFromUrl(url), price: info.price || '', found: !!info.title };
+  if (info.imageUrl && b.photo !== false && !process.env.MEMORY_STORE) {
+    const img = await within(4500, fetchImage(info.imageUrl));
+    if (img) {
+      const key = `img/${uid}/${newId()}.${img.type.split('/')[1].replace('jpeg', 'jpg')}`;
+      try {
+        const put = await fetch(presign('PUT', key, 300, img.type), { method: 'PUT', headers: { 'content-type': img.type }, body: img.body });
+        if (put.ok) { out.imageKey = key; out.imageUrl = presign('GET', key, 6 * 3600); }
+      } catch (e) { console.error('photo save failed', e); }
+    }
+  }
+  return out;
 }
 
 async function shopping(db, uid) {
@@ -577,13 +598,14 @@ async function kidsRoute(db, claims, method, parts, b) {
     if (is('DELETE', 4)) return deleteItem(db, kidId, z);
   }
   if (y === 'uploads' && is('POST', 3)) return newUpload(kidId, b);
+  if (y === 'unfurl' && is('POST', 3)) return lookupLink(kidId, b);
   fail(404, 'Not found');
 }
 
 // What a kid's own device may do: their list, lists in their groups, marking things bought.
 function kidAllowed(method, parts) {
   const [a, , y] = parts;
-  if (a === 'me' || a === 'items' || a === 'uploads' || a === 'shopping') return !(a === 'me' && method !== 'GET');
+  if (a === 'me' || a === 'items' || a === 'uploads' || a === 'unfurl' || a === 'shopping') return !(a === 'me' && method !== 'GET');
   if (a === 'groups') return (method === 'GET' && parts.length === 2) || y === 'lists';
   return false;
 }
@@ -620,6 +642,7 @@ async function route(db, claims, method, parts, b) {
     if (is('DELETE', 2)) return deleteItem(db, uid, x);
   }
   if (a === 'uploads' && is('POST', 1)) return newUpload(uid, b);
+  if (a === 'unfurl' && is('POST', 1)) return lookupLink(uid, b);
   if (a === 'shopping' && is('GET', 1)) return { items: await shopping(db, uid) };
   if (a === 'join' && is('POST', 1)) return joinByCode(db, claims, b);
   if (a === 'groups') {
