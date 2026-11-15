@@ -8,7 +8,7 @@ It will live at **https://giftedgifter.prismcortex.net**.
 - **Groups**: anyone can start one and invite people with a link or a 6-letter code. Your one list is shared with everyone in all your groups.
 - **Draw names**: the organizer sets households (spouses or housemates never draw each other), "never pair" exclusions, and an optional "no swaps" rule, then draws. Each person sees only their own match, behind a tap-to-reveal blur. People who joined after the draw get flagged so the organizer can redraw.
 - **Mark as bought**: one tap, with undo. Everyone else sees "Bought by Jen" so nobody doubles up. The person the list belongs to never sees it, not even through the API. Bought items collect on your **Shopping** page, and if someone deletes something you already bought, it stays there marked "Removed from their list".
-- **Kid accounts**: no email needed. A parent adds a kid under Account → Kids, picks their groups, and taps **Set up a phone** for a one-time code/link (15 minutes). The kid stays signed in on that phone until the parent signs them out. Kids keep their own list and see their groups' lists but can't create, join or leave groups; parents can edit a kid's list without seeing what's been bought for them.
+- **Managed accounts**: for people without an email (kids, grandparents…). Under Account → Managed accounts, add someone, pick which of your groups they're in, and **Send sign-in link** (one use, 15 minutes). They stay signed in on that device. **Full** accounts can then rename themselves and join, leave or start groups on their own; **Limited** accounts (for kids) only keep their list and see the groups you pick. The manager can edit their list (without seeing what's bought for them), sign them out everywhere, or remove the account — groups they organize pass to the longest-standing member.
 - **Live**: lists, purchases, joins and draws update for everyone right away over a WebSocket.
 
 ## Stack (same pattern as ICYN)
@@ -78,8 +78,8 @@ All routes need a Cognito ID token (`Authorization: Bearer …`).
 | `POST /groups/{gid}/code` | new invite code; the old one stops working (organizer) |
 | `GET /groups/{gid}/lists/{uid}` | a member's list (no bought info if it's yours) |
 | `POST/DELETE /groups/{gid}/lists/{uid}/items/{id}/bought` | mark / unmark bought |
-| `GET/POST /kids` · `PUT/DELETE /kids/{kid}` | a parent's kid accounts (name, groups) |
+| `GET/POST /kids` · `PUT/DELETE /kids/{kid}` | your managed accounts (name, groups, `limited`) |
 | `POST /kids/{kid}/login-code` · `DELETE /kids/{kid}/devices` | one-time phone sign-in code / sign out everywhere |
-| `/kids/{kid}/items…`, `/kids/{kid}/uploads` | parent edits the kid's list |
-| `POST /public/kid-login {code}` (no sign-in) | kid's phone trades the code for a device token |
-| `/kid/…` with `Authorization: Kid <token>` | the same API for a kid's phone (limited) |
+| `/kids/{kid}/items…`, `/kids/{kid}/uploads`, `/kids/{kid}/unfurl` | manager edits their list |
+| `POST /public/kid-login {code}` (no sign-in) | a managed account's device trades the code for a device token |
+| `/kid/…` with `Authorization: Kid <token>` | the same API for a managed account (limited ones get a subset) |

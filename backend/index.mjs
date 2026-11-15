@@ -132,7 +132,7 @@ async function getMe(db, claims) {
   }
   groups.sort((a, b) => (a.date || '9') < (b.date || '9') ? -1 : 1);
   const out = { id: p.uid, name: p.name, email: p.email, groups };
-  if (p.kid) { out.kid = true; out.parentName = (await db.get('USER#' + p.parentId, 'PROFILE'))?.name || ''; }
+  if (p.kid) { out.kid = true; out.limited = p.limited !== false; out.parentName = (await db.get('USER#' + p.parentId, 'PROFILE'))?.name || ''; }
   return out;
 }
 
@@ -438,9 +438,14 @@ async function resetDraw(db, uid, gid) {
   return { ok: true };
 }
 
-// ---------- kid accounts ----------
-// A parent (a normal Cognito account) creates kids. A kid signs in on a phone with a
-// one-time code from the parent and gets a long-lived device token, stored hashed:
+// ---------- managed accounts (internally "kids") ----------
+// Someone with a normal Cognito account creates accounts for people without an email
+// (kids, grandparents…). They sign in with a one-time code/link and get a long-lived
+// device token, stored hashed. A managed account is either:
+//   limited (profile.limited, the default for older kid accounts): own list + the groups
+//            the manager picks, nothing else
+//   full     (limited === false): can also rename themselves, join/leave/start groups
+// Records:
 //   USER#<parent> / KID#<kidId>      the parent's link to the kid
 //   USER#<kidId>  / PROFILE          {name, kid: true, parentId}
 //   USER#<kidId>  / TOKEN#<hash>     one per signed-in device
@@ -451,9 +456,9 @@ const KID_CODE_MS = 15 * 60 * 1000;
 
 async function kidOf(db, parentUid, kidId) {
   const link = await db.get('USER#' + parentUid, 'KID#' + kidId);
-  if (!link) fail(404, 'Kid not found');
+  if (!link) fail(404, 'Account not found');
   const p = await db.get('USER#' + kidId, 'PROFILE');
-  if (!p) fail(404, 'Kid not found');
+  if (!p) fail(404, 'Account not found');
   return p;
 }
 
@@ -468,7 +473,7 @@ async function listKids(db, parentUid) {
     for (const g of gs) { const meta = await db.get('GROUP#' + g.gid, 'META'); if (meta) groups.push({ id: meta.id, name: meta.name }); }
     const devices = (await db.query('USER#' + l.kidId, 'TOKEN#')).length;
     const items = (await db.query('USER#' + l.kidId, 'ITEM#')).length;
-    out.push({ id: l.kidId, name: p.name, groups, devices, items });
+    out.push({ id: l.kidId, name: p.name, limited: p.limited !== false, groups, devices, items });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -478,7 +483,9 @@ async function setKidGroups(db, parentUid, kid, wanted) {
   const target = new Set((Array.isArray(wanted) ? wanted : []).filter((g) => mine.has(g)));
   const current = new Set((await myGroups(db, kid.uid)).map((g) => g.gid));
   for (const gid of current) {
-    if (target.has(gid)) continue;
+    if (target.has(gid) || !mine.has(gid)) continue; // groups they joined themselves aren't the manager's to change
+    const meta = await db.get('GROUP#' + gid, 'META');
+    if (meta && meta.ownerId === kid.uid) fail(400, `${kid.name} organizes ${meta.name}, so they can't be taken out of it`);
     await db.del('GROUP#' + gid, 'MEMBER#' + kid.uid);
     await db.del('USER#' + kid.uid, 'GROUP#' + gid);
     await notify((await members(db, gid)).map((m) => m.uid), { type: 'changed', scope: 'group', groupId: gid });
@@ -495,12 +502,12 @@ async function setKidGroups(db, parentUid, kid, wanted) {
 
 async function createKid(db, claims, b) {
   const parent = await profile(db, claims);
-  if (parent.kid) fail(403, 'Ask a parent to do that');
+  if (parent.kid) fail(403, "Managed accounts can't set up other accounts");
   const name = cleanName(b.name);
   if (!name) fail(400, "What's their name?");
-  if ((await db.query('USER#' + parent.uid, 'KID#')).length >= 12) fail(400, 'Up to 12 kids per account');
+  if ((await db.query('USER#' + parent.uid, 'KID#')).length >= 12) fail(400, 'Up to 12 managed accounts each');
   const kidId = 'kid_' + newId();
-  const kid = { pk: 'USER#' + kidId, sk: 'PROFILE', uid: kidId, name, kid: true, parentId: parent.uid, email: '', createdAt: now() };
+  const kid = { pk: 'USER#' + kidId, sk: 'PROFILE', uid: kidId, name, kid: true, limited: !!b.limited, parentId: parent.uid, email: '', createdAt: now() };
   await db.put(kid);
   await db.put({ pk: 'USER#' + parent.uid, sk: 'KID#' + kidId, kidId });
   await setKidGroups(db, parent.uid, kid, b.groups);
@@ -519,6 +526,7 @@ async function updateKid(db, parentUid, kidId, b) {
       if (m) { m.name = name; await db.put(m); }
     }
   }
+  if (b.limited !== undefined && !!b.limited !== (kid.limited !== false)) { kid.limited = !!b.limited; await db.put(kid); }
   if (b.groups !== undefined) await setKidGroups(db, parentUid, kid, b.groups);
   return { ok: true };
 }
@@ -532,6 +540,14 @@ async function signOutKid(db, kidId) {
 
 async function deleteKid(db, parentUid, kidId) {
   const kid = await kidOf(db, parentUid, kidId);
+  // Groups they organize pass to the longest-standing other member (or are deleted if empty).
+  for (const g of await myGroups(db, kidId)) {
+    const meta = await db.get('GROUP#' + g.gid, 'META');
+    if (!meta || meta.ownerId !== kidId) continue;
+    const others = (await members(db, g.gid)).filter((m) => m.uid !== kidId).sort((a, b) => (a.joinedAt < b.joinedAt ? -1 : 1));
+    if (others.length) { meta.ownerId = others[0].uid; meta.v += 1; await db.put(meta); }
+    else await deleteGroup(db, kidId, g.gid);
+  }
   await setKidGroups(db, parentUid, kid, []);
   for (const g of await myGroups(db, kidId)) { // groups the parent has since left
     await db.del('GROUP#' + g.gid, 'MEMBER#' + kidId);
@@ -560,7 +576,7 @@ async function kidLoginCode(db, parentUid, kidId) {
 async function kidLogin(db, b) {
   const code = String(b.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const c = code.length === 8 && await db.get('KIDCODE#' + code, 'META');
-  if (!c || c.exp < Date.now()) fail(404, "That code didn't work. Ask your parent for a new one.");
+  if (!c || c.exp < Date.now()) fail(404, "That code didn't work. Ask whoever set up your account for a new one.");
   await db.del('KIDCODE#' + code, 'META'); // one use only
   const kid = await db.get('USER#' + c.kidId, 'PROFILE');
   if (!kid) fail(404, 'That account was removed');
@@ -576,7 +592,7 @@ export async function kidClaims(db, token) {
   const t = await db.get('KIDTOKEN#' + hashToken(token), 'META');
   if (!t) return null;
   const p = await db.get('USER#' + t.kidId, 'PROFILE');
-  return p ? { sub: p.uid, name: p.name, kid: true, parentId: p.parentId } : null;
+  return p ? { sub: p.uid, name: p.name, kid: true, limited: p.limited !== false, parentId: p.parentId } : null;
 }
 
 async function kidsRoute(db, claims, method, parts, b) {
@@ -630,7 +646,8 @@ async function route(db, claims, method, parts, b) {
   const uid = claims.sub;
   const [a, x, y, z, w, v] = parts;
   const is = (m, n) => method === m && parts.length === n;
-  if (claims.kid && !kidAllowed(method, parts)) fail(403, 'Ask your parent to do that');
+  if (claims.kid && a === 'kids') fail(403, "Managed accounts can't set up other accounts");
+  if (claims.kid && claims.limited && !kidAllowed(method, parts)) fail(403, 'Ask whoever manages your account to do that');
   if (a === 'kids') return kidsRoute(db, claims, method, parts, b);
   if (a === 'me' && is('GET', 1)) return getMe(db, claims);
   if (a === 'me' && is('PUT', 1)) return putMe(db, claims, b);
@@ -679,7 +696,7 @@ export const handler = async (event) => {
     if (parts[0] === 'kid') {
       const auth = event.headers?.authorization || event.headers?.Authorization || '';
       claims = await kidClaims(db, auth.replace(/^Kid\s+/i, ''));
-      if (!claims) fail(401, 'Signed out — ask your parent for a new sign-in code');
+      if (!claims) fail(401, 'Signed out — ask whoever set up your account for a new sign-in code');
       parts = parts.slice(1);
     } else {
       claims = event.requestContext?.authorizer?.jwt?.claims;
