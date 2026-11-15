@@ -467,7 +467,7 @@
       else if (i.bought.mine) actions.append(h('span', { class: 'bought-tag' }, '✓ You bought this'), h('button', { class: 'link', onclick: () => act(async () => { await api('DELETE', path); currentRender(true); }, 'Unmarked') }, 'Undo'));
       else actions.append(h('span', { class: 'bought-tag' }, `✓ Bought by ${i.bought.by}`));
     }
-    return h('article', { class: 'card item' + (i.bought ? ' is-bought' : '') }, photo,
+    return h('article', { class: 'card item' + (i.bought ? ' is-bought' : ''), 'data-id': i.id }, photo,
       h('div', { class: 'body' },
         h('h3', {}, i.title), meta,
         i.notes && h('div', { class: 'notes' }, i.notes),
@@ -530,6 +530,28 @@
         : h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '✨'),
             h('p', {}, tabGroup ? `Nothing shared with ${tabGroup.name} yet.` : 'Add what you\'d love to get. Type an idea, paste a link from any store, or add a photo.'),
             h('div', { class: 'row', style: 'justify-content:center' }, h('button', { onclick: add }, '+ Add something'), h('button', { class: 'ghost', onclick: imp }, 'Import a list')))));
+    fillPhotos(items.filter((i) => i.canFetchPhoto));
+  }
+
+  // Linked items without a photo (imported ones, older ones) get one from their link,
+  // two at a time in the background; each card updates as its photo arrives.
+  let photoRun = 0;
+  async function fillPhotos(todo) {
+    const run = ++photoRun, base = listBase(), queue = todo.slice(0, 40);
+    const card = (id) => $view.querySelector(`article.item[data-id="${CSS.escape(id)}"] .photo`);
+    queue.forEach((i) => { const c = card(i.id); if (c) c.classList.add('fetching'); });
+    const worker = async () => {
+      while (queue.length && run === photoRun && listBase() === base) {
+        const i = queue.shift();
+        let r = null;
+        try { r = await api('POST', `${base}/items/${i.id}/photo`); } catch (e) { /* leave it */ }
+        const c = card(i.id);
+        if (!c || run !== photoRun) continue;
+        c.classList.remove('fetching');
+        if (r && r.imageUrl) { c.classList.remove('none'); c.replaceChildren(h('img', { src: r.imageUrl, alt: r.title || '', loading: 'lazy' })); }
+      }
+    };
+    await Promise.all([worker(), worker()]);
   }
 
   // "Who can see this": all my groups, or only some.

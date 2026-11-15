@@ -109,7 +109,10 @@ async function cleanGroups(db, uid, groups) {
 
 function itemOut(i, viewer) {
   const o = { id: i.id, title: i.title, url: i.url, price: i.price, notes: i.notes, priority: i.priority, qty: i.qty || 1, createdAt: i.createdAt, imageKey: i.imageKey || '' };
-  if (viewer === i.owner) o.groups = i.groups || [];
+  if (viewer === i.owner) {
+    o.groups = i.groups || [];
+    o.canFetchPhoto = !!(i.url && !i.imageKey && !i.lookedUp); // the list page fills these in
+  }
   if (i.imageKey) o.imageUrl = presign('GET', i.imageKey, 6 * 3600);
   // The owner never learns what was bought. Everyone else sees it so nobody double-buys.
   if (viewer !== i.owner && i.boughtBy) o.bought = { by: i.boughtName, mine: i.boughtBy === viewer, at: i.boughtAt };
@@ -181,6 +184,7 @@ async function editItem(db, uid, id, b) {
   if (row.imageKey && row.imageKey !== it.imageKey) await deletePhoto(row.imageKey);
   const groups = b.groups !== undefined ? await cleanGroups(db, uid, b.groups) : (row.groups || []);
   const next = { ...row, ...it, groups, v: row.v + 1, updatedAt: now() };
+  if (next.url !== row.url) next.lookedUp = false; // new link: try for a photo again
   try { await db.put(next, { ifVersion: row.v }); } catch (e) { if (e instanceof Conflict) fail(409, 'Changed somewhere else — try again'); throw e; }
   if (row.boughtBy) {
     const s = await db.get('USER#' + row.boughtBy, `BOUGHT#${uid}#${id}`);
@@ -229,6 +233,24 @@ async function lookupLink(uid, b) {
     }
   }
   return out;
+}
+
+// Fill in a photo (and a missing price) for a linked item that has none — e.g. imported
+// items. Tried once per link; owner or manager only.
+async function itemPhoto(db, uid, id) {
+  const row = await db.get('USER#' + uid, 'ITEM#' + id);
+  if (!row) fail(404, 'Item not found');
+  if (row.imageKey || !row.url || row.lookedUp) return itemOut(row, uid);
+  const r = await lookupLink(uid, { url: row.url, photo: true });
+  const fresh = await db.get('USER#' + uid, 'ITEM#' + id);
+  if (!fresh || fresh.imageKey || fresh.url !== row.url) { if (r.imageKey) await deletePhoto(r.imageKey); return fresh ? itemOut(fresh, uid) : {}; }
+  const next = { ...fresh, lookedUp: true, v: fresh.v + 1 };
+  if (r.imageKey) next.imageKey = r.imageKey;
+  if (r.found && r.price && !next.price) next.price = r.price;
+  try { await db.put(next, { ifVersion: fresh.v }); }
+  catch (e) { if (r.imageKey) await deletePhoto(r.imageKey); if (e instanceof Conflict) return itemOut(fresh, uid); throw e; }
+  if (r.imageKey) await notify((await audienceOf(db, uid)).filter((x) => x !== uid), { type: 'changed', scope: 'list', userId: uid });
+  return itemOut(next, uid);
 }
 
 async function shopping(db, uid) {
@@ -611,6 +633,7 @@ async function kidsRoute(db, claims, method, parts, b) {
     if (is('GET', 3)) return { items: await myItems(db, kidId) };
     if (is('POST', 3)) return addItems(db, kidId, b);
     if (is('PUT', 4)) return editItem(db, kidId, z, b);
+    if (parts[4] === 'photo' && is('POST', 5)) return itemPhoto(db, kidId, z);
     if (is('DELETE', 4)) return deleteItem(db, kidId, z);
   }
   if (y === 'uploads' && is('POST', 3)) return newUpload(kidId, b);
@@ -656,6 +679,7 @@ async function route(db, claims, method, parts, b) {
     if (is('GET', 1)) return { items: await myItems(db, uid) };
     if (is('POST', 1)) return addItems(db, uid, b);
     if (is('PUT', 2)) return editItem(db, uid, x, b);
+    if (y === 'photo' && is('POST', 3)) return itemPhoto(db, uid, x);
     if (is('DELETE', 2)) return deleteItem(db, uid, x);
   }
   if (a === 'uploads' && is('POST', 1)) return newUpload(uid, b);
