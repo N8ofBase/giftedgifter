@@ -75,6 +75,7 @@ All routes need a Cognito ID token (`Authorization: Bearer …`).
 | `GET/PUT/DELETE /groups/{gid}` | group (PUT/DELETE: organizer only; PUT takes `rules {households, exclusions, noPairs}`) |
 | `DELETE /groups/{gid}/members/{uid}` | leave, or the organizer removes someone |
 | `POST/DELETE /groups/{gid}/draw` | draw / clear (organizer) |
+| `POST /groups/{gid}/code` | new invite code; the old one stops working (organizer) |
 | `GET /groups/{gid}/lists/{uid}` | a member's list (no bought info if it's yours) |
 | `POST/DELETE /groups/{gid}/lists/{uid}/items/{id}/bought` | mark / unmark bought |
 | `GET/POST /kids` · `PUT/DELETE /kids/{kid}` | a parent's kid accounts (name, groups) |

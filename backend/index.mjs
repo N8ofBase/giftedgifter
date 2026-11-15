@@ -308,6 +308,26 @@ async function putGroup(db, uid, gid, b) {
   return { ok: true };
 }
 
+// Organizer swaps the invite code: the old link and code stop working; members stay.
+async function newInviteCode(db, uid, gid) {
+  const meta = await groupFor(db, gid, uid);
+  if (meta.ownerId !== uid) fail(403, 'Only the organizer can change the invite code');
+  let code;
+  for (let i = 0; i < 5; i++) {
+    code = newCode();
+    try { await db.put({ pk: 'CODE#' + code, sk: 'META', gid }, { ifNew: true }); break; }
+    catch (e) { if (!(e instanceof Conflict) || i === 4) throw e; }
+  }
+  const old = meta.code;
+  const prev = meta.v;
+  meta.code = code;
+  meta.v = prev + 1;
+  try { await db.put(meta, { ifVersion: prev }); }
+  catch (e) { await db.del('CODE#' + code, 'META'); if (e instanceof Conflict) fail(409, 'Changed somewhere else — try again'); throw e; }
+  await db.del('CODE#' + old, 'META');
+  return { code };
+}
+
 async function deleteGroup(db, uid, gid) {
   const meta = await groupFor(db, gid, uid);
   if (meta.ownerId !== uid) fail(403, 'Only the organizer can delete the group');
@@ -608,6 +628,7 @@ async function route(db, claims, method, parts, b) {
     if (is('PUT', 2)) return putGroup(db, uid, x, b);
     if (is('DELETE', 2)) return deleteGroup(db, uid, x);
     if (y === 'members' && is('DELETE', 4)) return removeMember(db, uid, x, z);
+    if (y === 'code' && is('POST', 3)) return newInviteCode(db, uid, x);
     if (y === 'draw' && is('POST', 3)) return runDraw(db, uid, x);
     if (y === 'draw' && is('DELETE', 3)) return resetDraw(db, uid, x);
     if (y === 'lists' && is('GET', 4)) return memberList(db, uid, x, z);

@@ -322,8 +322,10 @@
           h('span', { class: 'muted' }, '›'))))),
       isKid() ? null : h('div', { class: 'section card stack' },
         h('h2', {}, 'Invite people'),
-        h('p', { class: 'muted small' }, 'Share the link, or have them enter the code on their Groups page.'),
-        h('div', { class: 'row' }, h('span', { class: 'code-box' }, g.code), h('button', { onclick: share }, 'Share invite link'))),
+        h('p', { class: 'muted small' }, 'Share the link, or have them enter the code on their Groups page. Anyone with it can join, so only send it to people you want in.'),
+        h('div', { class: 'row' }, h('span', { class: 'code-box' }, g.code), h('button', { onclick: share }, 'Share invite link')),
+        g.admin && h('p', { class: 'small', style: 'margin:0' },
+          h('button', { class: 'link', onclick: () => confirm('Make a new invite code? The current link and code will stop working. People already in the group stay in.') && act(async () => { await api('POST', `/groups/${g.id}/code`); currentRender(true); }, 'New invite code made — the old one no longer works') }, 'Get a new invite code'))),
       g.admin ? adminPanel(g, notInDraw) : isKid() ? null : h('div', { class: 'section' }, h('button', { class: 'danger-text', onclick: () => leaveGroup(g) }, 'Leave this group')));
   }
 
