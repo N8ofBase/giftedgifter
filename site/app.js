@@ -875,7 +875,7 @@
   async function phoneModal(k) {
     let r;
     try { r = await api('POST', `/kids/${k.id}/login-code`); } catch (e) { return toast(e.message, true); }
-    const link = `${location.origin}/#/kid/${r.code}`;
+    const link = `${location.origin}/#/managed/${r.code}`;
     const share = async () => {
       if (navigator.share) { try { await navigator.share({ title: 'Gifted Gifter', text: `${k.name}, here's your Gifted Gifter sign-in link`, url: link }); return; } catch (e) { if (e.name === 'AbortError') return; } }
       await navigator.clipboard.writeText(link); toast('Sign-in link copied');
@@ -893,7 +893,7 @@
 
   // ---------- start ----------
   async function start() {
-    const kidLink = location.hash.match(/^#\/kid\/([A-Za-z0-9]+)/);
+    const kidLink = location.hash.match(/^#\/(?:managed|kid)\/([A-Za-z0-9]+)/); // #/kid/ links sent earlier still work
     if (kidLink) {
       history.replaceState(null, '', '/#/');
       try { await kidSignIn(kidLink[1]); }
