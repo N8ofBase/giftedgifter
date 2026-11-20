@@ -554,6 +554,8 @@ async function updateKid(db, parentUid, kidId, b) {
 }
 
 async function signOutKid(db, kidId) {
+  const kid = await db.get('USER#' + kidId, 'PROFILE');
+  if (kid) await revokeLoginCode(db, kid); // their link stops working too
   for (const t of await db.query('USER#' + kidId, 'TOKEN#')) {
     await db.del('KIDTOKEN#' + t.hash, 'META');
     await db.del(t.pk, t.sk);
@@ -582,14 +584,26 @@ async function deleteKid(db, parentUid, kidId) {
   return { ok: true };
 }
 
-async function kidLoginCode(db, parentUid, kidId) {
-  await kidOf(db, parentUid, kidId);
+// Each managed account has one standing sign-in link: it works on any number of devices
+// until the manager makes a new one, signs them out everywhere, or removes the account.
+async function revokeLoginCode(db, kid) {
+  if (!kid.loginCode) return;
+  await db.del('KIDCODE#' + kid.loginCode, 'META');
+  delete kid.loginCode;
+  await db.put(kid);
+}
+
+async function kidLoginCode(db, parentUid, kidId, b) {
+  const kid = await kidOf(db, parentUid, kidId);
+  if (kid.loginCode && !b.fresh && await db.get('KIDCODE#' + kid.loginCode, 'META')) return { code: kid.loginCode };
+  await revokeLoginCode(db, kid);
   for (let i = 0; i < 5; i++) {
     const code = newCode() + newCode().slice(0, 2); // 8 characters
-    const exp = Date.now() + KID_CODE_MS;
     try {
-      await db.put({ pk: 'KIDCODE#' + code, sk: 'META', kidId, exp, ttl: Math.floor(exp / 1000) + 3600 }, { ifNew: true });
-      return { code, expiresAt: new Date(exp).toISOString() };
+      await db.put({ pk: 'KIDCODE#' + code, sk: 'META', kidId, createdAt: now() }, { ifNew: true });
+      kid.loginCode = code;
+      await db.put(kid);
+      return { code };
     } catch (e) { if (!(e instanceof Conflict)) throw e; }
   }
   fail(500, 'Try again');
@@ -598,8 +612,8 @@ async function kidLoginCode(db, parentUid, kidId) {
 async function kidLogin(db, b) {
   const code = String(b.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const c = code.length === 8 && await db.get('KIDCODE#' + code, 'META');
-  if (!c || c.exp < Date.now()) fail(404, "That code didn't work. Ask whoever set up your account for a new one.");
-  await db.del('KIDCODE#' + code, 'META'); // one use only
+  if (!c || (c.exp && c.exp < Date.now())) fail(404, "That code didn't work. Ask whoever set up your account for a new one.");
+  if (c.exp) await db.del('KIDCODE#' + code, 'META'); // older 15-minute codes stay one-use
   const kid = await db.get('USER#' + c.kidId, 'PROFILE');
   if (!kid) fail(404, 'That account was removed');
   const token = crypto.randomBytes(32).toString('base64url');
@@ -626,7 +640,7 @@ async function kidsRoute(db, claims, method, parts, b) {
   await kidOf(db, uid, kidId);
   if (is('PUT', 2)) return updateKid(db, uid, kidId, b);
   if (is('DELETE', 2)) return deleteKid(db, uid, kidId);
-  if (y === 'login-code' && is('POST', 3)) return kidLoginCode(db, uid, kidId);
+  if (y === 'login-code' && is('POST', 3)) return kidLoginCode(db, uid, kidId, b);
   if (y === 'devices' && is('DELETE', 3)) { await signOutKid(db, kidId); return { ok: true }; }
   // The parent edits the kid's list. Bought marks stay hidden: the list is shown as the kid sees it.
   if (y === 'items') {

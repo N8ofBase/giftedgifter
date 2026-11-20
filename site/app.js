@@ -864,7 +864,7 @@
           h('button', { class: 'small', onclick: () => phoneModal(k) }, 'Send sign-in link'),
           h('a', { class: 'btn ghost small', href: `#/kids/${k.id}/list` }, 'Edit list'),
           h('button', { class: 'ghost small', onclick: () => kidModal(k) }, 'Settings'),
-          k.devices ? h('button', { class: 'danger-text', onclick: () => confirm(`Sign ${k.name} out of every device?`) && act(async () => { await api('DELETE', `/kids/${k.id}/devices`); currentRender(true); }, 'Signed out') }, 'Sign out devices') : null,
+          k.devices ? h('button', { class: 'danger-text', onclick: () => confirm(`Sign ${k.name} out of every device? Their sign-in link will stop working too — you can make a new one.`) && act(async () => { await api('DELETE', `/kids/${k.id}/devices`); currentRender(true); }, 'Signed out') }, 'Sign out devices') : null,
           h('button', { class: 'danger-text', onclick: () => confirm(`Remove ${k.name}'s account and list? This can't be undone.`) && act(async () => { await api('DELETE', `/kids/${k.id}`); currentRender(true); }, 'Removed') }, 'Remove'))))) : null);
   }
 
@@ -892,22 +892,23 @@
     } }, k ? 'Save' : 'Add')]);
   }
 
-  async function phoneModal(k) {
+  async function phoneModal(k, fresh) {
     let r;
-    try { r = await api('POST', `/kids/${k.id}/login-code`); } catch (e) { return toast(e.message, true); }
+    try { r = await api('POST', `/kids/${k.id}/login-code`, fresh ? { fresh: true } : {}); } catch (e) { return toast(e.message, true); }
     const link = `${location.origin}/#/managed/${r.code}`;
     const share = async () => {
       if (navigator.share) { try { await navigator.share({ title: 'Gifted Gifter', text: `${k.name}, here's your Gifted Gifter sign-in link`, url: link }); return; } catch (e) { if (e.name === 'AbortError') return; } }
       await navigator.clipboard.writeText(link); toast('Sign-in link copied');
     };
-    const mins = Math.round((new Date(r.expiresAt) - Date.now()) / 60000);
     modal(`Sign ${k.name} in`, h('div', { class: 'stack' },
       h('p', {}, `Text or email this link to ${k.name}, or open it on their phone:`),
       h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('input', { value: link, readonly: true, onfocus: (e) => e.target.select() }), h('button', { onclick: share }, 'Share')),
       h('p', { class: 'muted' }, `Or they can go to ${location.host}, tap “Have a sign-in code?” and enter:`),
       h('div', { class: 'code-box', style: 'text-align:center;font-size:30px' }, r.code),
-      h('p', { class: 'muted small' }, `The link works once and expires in ${mins} minutes. ${k.name} stays signed in on that device until you sign them out. Need another device? Send a new link.`)),
-      (close) => [h('button', { onclick: close }, 'Done')]);
+      h('p', { class: 'muted small' }, `This link doesn't expire — ${k.name} can use it on any phone or computer. Anyone with it can sign in as ${k.name}, so only send it to them. It stops working when you make a new link, sign them out, or remove the account.`)),
+      (close) => [
+        h('button', { class: 'danger-text', onclick: () => confirm(`Make a new link for ${k.name}? The current one stops working (devices already signed in stay signed in).`) && (close(), phoneModal(k, true)) }, 'Make a new link'),
+        h('button', { onclick: close }, 'Done')]);
   }
   function setInitial() { document.getElementById('me-initial').textContent = initials(me && me.name); }
 
