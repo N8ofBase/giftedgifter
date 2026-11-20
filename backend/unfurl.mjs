@@ -48,6 +48,37 @@ async function safeFetch(u, accept) {
   throw new Error('too many redirects');
 }
 
+// Amazon short links (a.co/d/…, amzn.to/…) can't carry an affiliate tag. Follow their
+// redirects — without loading Amazon's page — to the full product address, then trim it
+// to https://www.amazon.com/dp/<ASIN> (which also drops anyone else's tag).
+const SHORT = /^(a\.co|amzn\.to|amzn\.com|amzn\.eu)$/i;
+const AMAZON = /(^|\.)amazon\.(com|ca|co\.uk|de|fr|it|es|com\.au|co\.jp|in|com\.mx)$/i;
+export const isAmazonShort = (u) => { try { return SHORT.test(new URL(u).hostname.replace(/^www\./, '')); } catch { return false; } };
+export function cleanAmazon(u) {
+  try {
+    const x = new URL(u);
+    if (!AMAZON.test(x.hostname)) return u;
+    const m = x.pathname.match(/\/(?:dp|gp\/product|gp\/aw\/d|exec\/obidos\/asin)\/([A-Z0-9]{10})(?:[/?]|$)/i);
+    return m ? `https://${x.hostname.replace(/^(?:smile|m)\./, 'www.')}/dp/${m[1].toUpperCase()}` : u;
+  } catch { return u; }
+}
+export async function resolveAmazonShort(u) {
+  if (!isAmazonShort(u)) return u;
+  try {
+    let url = u;
+    for (let hop = 0; hop < 5; hop++) {
+      if (AMAZON.test(new URL(url).hostname)) return cleanAmazon(url);
+      await checkUrl(url);
+      const res = await fetch(url, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(5000), headers: { 'user-agent': UA } });
+      res.body?.cancel().catch(() => {});
+      const loc = res.headers.get('location');
+      if (!(res.status >= 300 && res.status < 400 && loc)) return u;
+      url = new URL(loc, url).href;
+    }
+  } catch (e) { console.log('short link resolve failed', u, e.message); }
+  return u;
+}
+
 async function readCapped(res, max) {
   const reader = res.body.getReader();
   const chunks = [];

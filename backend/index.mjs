@@ -15,7 +15,7 @@ import { store, Conflict } from './store.mjs';
 import { drawNames } from './draw.mjs';
 import { handleSocket, notify } from './live.mjs';
 import { presign, deletePhoto } from './s3.mjs';
-import { unfurl, fetchImage } from './unfurl.mjs';
+import { unfurl, fetchImage, isAmazonShort, resolveAmazonShort, cleanAmazon } from './unfurl.mjs';
 
 const ORIGINS = (process.env.ALLOW_ORIGINS || '*').split(',');
 const MAX_ITEMS = 200;
@@ -153,8 +153,25 @@ async function putMe(db, claims, b) {
   return { ok: true, name };
 }
 
+// Turn Amazon short links into full (taggable) product links.
+async function expandLinks(items) {
+  await Promise.all(items.map(async (it) => {
+    if (it.url && isAmazonShort(it.url)) it.url = await resolveAmazonShort(it.url);
+    else if (it.url) it.url = cleanAmazon(it.url);
+  }));
+}
+
 async function myItems(db, uid) {
-  return (await db.query('USER#' + uid, 'ITEM#')).sort(sortItems).map((i) => itemOut(i, uid));
+  const rows = await db.query('USER#' + uid, 'ITEM#');
+  // Older items saved with short links get expanded the next time their owner opens the list.
+  const short = rows.filter((r) => r.url && isAmazonShort(r.url)).slice(0, 15);
+  await Promise.all(short.map(async (r) => {
+    const full = await resolveAmazonShort(r.url);
+    if (full === r.url) return;
+    const next = { ...r, url: full, v: r.v + 1 };
+    try { await db.put(next, { ifVersion: r.v }); Object.assign(r, next); } catch (e) { if (!(e instanceof Conflict)) throw e; }
+  }));
+  return rows.sort(sortItems).map((i) => itemOut(i, uid));
 }
 
 async function addItems(db, uid, b) {
@@ -164,6 +181,7 @@ async function addItems(db, uid, b) {
   if (!items.length) fail(400, 'Give it a name, a link or a photo');
   const groups = await cleanGroups(db, uid, b.groups);
   if (have + items.length > MAX_ITEMS) fail(400, `Lists hold up to ${MAX_ITEMS} things`);
+  await expandLinks(items);
   const t = Date.now();
   const saved = [];
   for (const [k, it] of items.entries()) {
@@ -183,6 +201,7 @@ async function editItem(db, uid, id, b) {
   if (!it) fail(400, 'Give it a name, a link or a photo');
   if (row.imageKey && row.imageKey !== it.imageKey) await deletePhoto(row.imageKey);
   const groups = b.groups !== undefined ? await cleanGroups(db, uid, b.groups) : (row.groups || []);
+  await expandLinks([it]);
   const next = { ...row, ...it, groups, v: row.v + 1, updatedAt: now() };
   if (next.url !== row.url) next.lookedUp = false; // new link: try for a photo again
   try { await db.put(next, { ifVersion: row.v }); } catch (e) { if (e instanceof Conflict) fail(409, 'Changed somewhere else — try again'); throw e; }
