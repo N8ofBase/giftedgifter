@@ -472,9 +472,8 @@ async function resetDraw(db, uid, gid) {
 //   USER#<kidId>  / PROFILE          {name, kid: true, parentId}
 //   USER#<kidId>  / TOKEN#<hash>     one per signed-in device
 //   KIDTOKEN#<hash> / META           {kidId}  token lookup
-//   KIDCODE#<code>  / META           {kidId, exp}  one-time sign-in code (15 min)
+//   KIDCODE#<code>  / META           {kidId}  standing sign-in code, no time limit (profile.loginCode)
 const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
-const KID_CODE_MS = 15 * 60 * 1000;
 
 async function kidOf(db, parentUid, kidId) {
   const link = await db.get('USER#' + parentUid, 'KID#' + kidId);
