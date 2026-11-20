@@ -27,6 +27,26 @@
   const daysUntil = (d) => d ? Math.ceil((new Date(d + 'T12:00:00') - new Date()) / 86400000) : null;
   const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; } };
 
+  // ---------- affiliate links (settings in affiliate.js; off when empty) ----------
+  const AFF = window.GG_AFFILIATE || {};
+  const isAmazon = (hn) => /(^|\.)amazon\.(com|ca|co\.uk|de|fr|it|es|com\.au|co\.jp|in|com\.mx)$/i.test(hn);
+  function outLink(u) {
+    try {
+      const x = new URL(u);
+      const hn = x.hostname.replace(/^www\./, '');
+      if (AFF.amazonTag && isAmazon(hn)) { x.searchParams.set('tag', AFF.amazonTag); return x.href; }
+      if (AFF.wrap && !isAmazon(hn) && !(AFF.skip || []).some((s) => hn === s || hn.endsWith('.' + s))) return AFF.wrap.replace('{url}', encodeURIComponent(u));
+    } catch (e) { /* not a URL: leave it */ }
+    return u;
+  }
+  (function showDisclosure() {
+    const p = document.getElementById('aff-note');
+    if (!p || !(AFF.amazonTag || AFF.wrap)) return;
+    p.textContent = (AFF.amazonTag ? 'As an Amazon Associate, Prism Cortex earns from qualifying purchases. ' : '') +
+      (AFF.wrap ? 'Some other store links may also earn Prism Cortex a small commission, at no extra cost to you.' : '');
+    p.hidden = false;
+  })();
+
   function toast(msg, err) {
     const t = h('div', { class: 'toast' + (err ? ' err' : '') }, msg);
     document.getElementById('toasts').append(t);
@@ -471,7 +491,7 @@
       h('div', { class: 'body' },
         h('h3', {}, i.title), meta,
         i.notes && h('div', { class: 'notes' }, i.notes),
-        i.url && h('a', { class: 'shop', href: i.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, `Open link · ${host(i.url)} ↗`),
+        i.url && h('a', { class: 'shop', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored' }, `Open link · ${host(i.url)} ↗`),
         actions));
   }
 
@@ -596,7 +616,7 @@
       if (t && /^https?:\/\/\S+$/.test(t.trim()) && !url.value) { e.preventDefault(); url.value = t.trim(); if (!title.value) title.placeholder = 'Name it (or leave blank to use the link)'; lookup(); }
     });
     // Paste a link → look up the page and fill in what's still empty.
-    const lookupNote = h('div', { class: 'small muted', 'aria-live': 'polite', style: 'margin-top:6px' });
+    const lookupNote = h('div', { class: 'small muted', 'aria-live': 'polite', style: 'margin-top:6px;min-height:2.6em' }); // space reserved so buttons don't jump mid-tap
     let looked = i.url || '', autoTitle = false, lookupTimer;
     title.addEventListener('input', () => { autoTitle = false; });
     async function lookup() {
@@ -792,7 +812,7 @@
           h('div', {}, h('div', { style: 'font-weight:600' }, i.title, i.removed ? h('span', { class: 'pill berry', style: 'margin-left:6px' }, 'Removed from their list') : null),
             h('div', { class: 'muted small' }, [i.price, i.url && host(i.url)].filter(Boolean).join(' · '))),
           h('div', { class: 'row' },
-            i.url && h('a', { class: 'small', href: i.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, 'Link ↗'),
+            i.url && h('a', { class: 'small', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored' }, 'Link ↗'),
             !i.removed && h('a', { class: 'small', href: `#/g/${i.gid}/u/${encodeURIComponent(i.ownerId)}` }, 'Their list')))))));
   }
 
