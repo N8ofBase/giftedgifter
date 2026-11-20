@@ -2,7 +2,7 @@
 // Edit this file, commit and push; Amplify publishes it like any other change.
 window.GG_AFFILIATE = {
   // Amazon Associates tracking ID, e.g. 'prismcortex-20'. Adds ?tag=… to amazon.com links.
-  amazonTag: '',
+  amazonTag: 'prismcortex-20',
   // A link-wrapping service for every other store (Sovrn Commerce, Skimlinks…).
   // Use {url} where the store link goes, e.g.
   //   'https://redirect.viglink.com?key=YOUR_KEY&u={url}'
