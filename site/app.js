@@ -39,6 +39,10 @@
     } catch (e) { /* not a URL: leave it */ }
     return u;
   }
+  // "Shop on Amazon" and "Find it on Amazon" (tagged when an Amazon tag is set).
+  const amazonHome = () => outLink('https://www.amazon.com/');
+  const amazonSearch = (q) => outLink('https://www.amazon.com/s?k=' + encodeURIComponent(String(q).slice(0, 120)));
+  const shopAmazonBtn = () => h('a', { class: 'btn ghost amazon-btn', href: amazonHome(), target: '_blank', rel: 'noopener nofollow sponsored' }, 'Shop on Amazon ↗');
   (function showDisclosure() {
     const p = document.getElementById('aff-note');
     if (!p || !(AFF.amazonTag || AFF.wrap)) return;
@@ -494,6 +498,7 @@
         h('h3', {}, i.title), meta,
         i.notes && h('div', { class: 'notes' }, i.notes),
         i.url && h('a', { class: 'shop', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored' }, `Open link · ${host(i.url)} ↗`),
+        !i.url && !ctx.mine && h('a', { class: 'shop', href: amazonSearch(i.title), target: '_blank', rel: 'noopener nofollow sponsored' }, 'Find it on Amazon ↗'),
         actions));
   }
 
@@ -545,7 +550,7 @@
             listOwner && !groups.length ? `${first} isn't in any of your groups yet — add them under Account → Managed accounts.` :
             tabGroup ? `What people in ${tabGroup.name} see. Things you add here go to this group only.` :
             listOwner ? `You're editing ${first}'s list. You won't see what's been bought for ${first}.` : 'Everything on your list. You\'ll never see what\'s been bought.')),
-        h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: imp }, 'Import'), h('button', { onclick: add }, '+ Add something'))),
+        h('div', { class: 'row' }, shopAmazonBtn(), h('button', { class: 'ghost', onclick: imp }, 'Import'), h('button', { onclick: add }, '+ Add something'))),
       tabs,
       h('div', { class: 'section' }, shown.length
         ? h('div', { class: 'items' }, shown.map((i) => itemCard(i, { mine: true, groups })))
@@ -810,7 +815,7 @@
     });
     name.addEventListener('keydown', (e) => e.key === 'Enter' && create());
     paint(
-      h('h1', {}, 'My Lists'),
+      h('div', { class: 'row between' }, h('h1', { style: 'margin:0' }, 'My Lists'), shopAmazonBtn()),
       h('p', { class: 'muted' }, 'Lists only you can see — groceries, errands, packing, gift ideas for other people. Nobody in your groups sees these.'),
       lists.length
         ? h('div', { class: 'grid' }, lists.map((l) => h('a', { class: 'card group-card', href: '#/private/' + l.id },
@@ -852,7 +857,8 @@
         h('button', { class: 'p-body', onclick: () => pItemModal(base, i) },
           h('span', { class: 'p-title' }, i.title),
           (i.price || i.notes || i.url) && h('span', { class: 'muted small' }, [i.price, i.notes, i.url && host(i.url)].filter(Boolean).join(' · '))),
-        i.url && h('a', { class: 'p-link', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored', 'aria-label': 'Open link for ' + i.title }, '↗'));
+        i.url ? h('a', { class: 'p-link', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored', 'aria-label': 'Open link for ' + i.title }, '↗')
+          : !i.done && h('a', { class: 'p-amz', href: amazonSearch(i.title), target: '_blank', rel: 'noopener nofollow sponsored', 'aria-label': 'Find ' + i.title + ' on Amazon' }, 'Amazon ↗'));
     };
     paint(
       h('a', { class: 'back', href: '#/private' }, '← My Lists'),
@@ -860,7 +866,7 @@
         h('div', { class: 'row' },
           h('button', { class: 'ghost small', onclick: () => { const n = prompt('Rename list', list.name); if (n && n.trim()) act(async () => { await api('PUT', base, { name: n }); currentRender(true); }); } }, 'Rename'),
           h('button', { class: 'danger-text', onclick: () => confirm(`Delete "${list.name}" and everything on it?`) && act(async () => { await api('DELETE', base); location.hash = '#/private'; }, 'List deleted') }, 'Delete'))),
-      h('p', { class: 'muted small' }, 'Only you can see this list. Tip: paste several lines (or links) to add them all at once.'),
+      h('div', { class: 'row between', style: 'margin-bottom:14px' }, h('p', { class: 'muted small', style: 'margin:0;flex:1;min-width:200px' }, 'Only you can see this list. Tip: paste several lines (or links) to add them all at once.'), shopAmazonBtn()),
       h('div', { class: 'card', style: 'padding:10px 12px' }, h('div', { class: 'row', style: 'flex-wrap:nowrap;align-items:flex-start' }, quick, h('button', { onclick: add }, 'Add'))),
       h('div', { class: 'section card p-list' }, open.length ? open.map(row) : h('p', { class: 'muted', style: 'margin:6px 4px' }, items.length ? 'Everything is checked off. 🎉' : 'Nothing here yet — add something above.')),
       done.length ? h('div', { class: 'section' },
@@ -893,7 +899,7 @@
     const by = {};
     for (const i of items) (by[i.ownerName] = by[i.ownerName] || []).push(i);
     paint(
-      h('h1', {}, 'Shopping'),
+      h('div', { class: 'row between' }, h('h1', { style: 'margin:0' }, 'Shopping'), shopAmazonBtn()),
       h('p', { class: 'muted' }, 'Everything you\'ve marked as bought, by person.'),
       items.length ? null : h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '🛍️'), h('p', {}, 'Nothing yet. When you buy something from someone\'s list, tap "I bought this" and it shows up here.')),
       Object.entries(by).map(([name, list]) => h('div', { class: 'section card' },
