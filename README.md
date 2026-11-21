@@ -9,6 +9,7 @@ It will live at **https://giftedgifter.prismcortex.net**.
 - **Draw names**: the organizer sets households (spouses or housemates never draw each other), "never pair" exclusions, and an optional "no swaps" rule, then draws. Each person sees only their own match, behind a tap-to-reveal blur. People who joined after the draw get flagged so the organizer can redraw.
 - **Mark as bought**: one tap, with undo. Everyone else sees "Bought by Jen" so nobody doubles up. The person the list belongs to never sees it, not even through the API. Bought items collect on your **Shopping** page, and if someone deletes something you already bought, it stays there marked "Removed from their list".
 - **Managed accounts**: for people without an email (kids, grandparents…). Under Account → Managed accounts, add someone, pick which of your groups they're in, and **Send sign-in link** (works until you make a new one or sign them out). They stay signed in on that device. **Full** accounts can then rename themselves and join, leave or start groups on their own; **Limited** accounts (for kids) only keep their list and see the groups you pick. The manager can edit their list (without seeing what's bought for them), sign them out everywhere, or remove the account — groups they organize pass to the longest-standing member.
+- **Private lists**: lists only the owner sees (groceries, errands, gift ideas for others) under **Lists** — quick add (paste several lines or links), check off, clear checked.
 - **Live**: lists, purchases, joins and draws update for everyone right away over a WebSocket.
 
 ## Stack (same pattern as ICYN)
@@ -71,6 +72,7 @@ All routes need a Cognito ID token (`Authorization: Bearer …`).
 | `GET /items` · `POST /items {item}` or `{items:[…], groups}` · `PUT/DELETE /items/{id}` | your list (`groups: []` = all your groups, else only those group ids) |
 | `POST /uploads {contentType}` | presigned photo upload → `{key, uploadUrl}` |
 | `GET /shopping` | what you've marked bought |
+| `GET/POST /private` · `GET/PUT/DELETE /private/{lid}` · `POST /private/{lid}/items` · `PUT/DELETE /private/{lid}/items/{id}` · `POST /private/{lid}/clear-done` | private lists (owner only) |
 | `POST /groups` · `POST /join {code}` | create / join |
 | `GET/PUT/DELETE /groups/{gid}` | group (PUT/DELETE: organizer only; PUT takes `rules {households, exclusions, noPairs}`) |
 | `DELETE /groups/{gid}/members/{uid}` | leave, or the organizer removes someone |

@@ -479,6 +479,96 @@ async function resetDraw(db, uid, gid) {
   return { ok: true };
 }
 
+// ---------- private lists (only the owner ever sees these) ----------
+//   USER#<sub> / PLIST#<lid>          {name, createdAt}
+//   USER#<sub> / PITEM#<lid>#<iid>    {title, url, price, notes, done}
+const MAX_PLISTS = 50, MAX_PITEMS = 300;
+const plistOut = (l, items) => ({ id: l.id, name: l.name, createdAt: l.createdAt, count: items.length, open: items.filter((i) => !i.done).length });
+const pitemOut = (i) => ({ id: i.id, title: i.title, url: i.url, price: i.price, notes: i.notes, done: !!i.done, createdAt: i.createdAt });
+function cleanPItem(b) {
+  const it = { title: line(b.title, 140), url: cleanUrl(b.url), price: line(b.price, 24), notes: text(b.notes, 600) };
+  if (!it.title && it.url) it.title = titleFromUrl(it.url);
+  return it.title ? it : null;
+}
+async function plist(db, uid, lid) {
+  const l = await db.get('USER#' + uid, 'PLIST#' + lid);
+  if (!l) fail(404, 'List not found');
+  return l;
+}
+const pitems = (db, uid, lid) => db.query('USER#' + uid, `PITEM#${lid}#`);
+const sortP = (a, b) => (a.done - b.done) || (a.createdAt < b.createdAt ? -1 : 1);
+const pchanged = (uid, lid) => notify([uid], { type: 'changed', scope: 'plists', listId: lid });
+
+async function privateRoute(db, uid, method, parts, b) {
+  const [, lid, y, iid] = parts;
+  const is = (m, n) => method === m && parts.length === n;
+  if (is('GET', 1)) {
+    const lists = await db.query('USER#' + uid, 'PLIST#');
+    const all = await db.query('USER#' + uid, 'PITEM#');
+    return { lists: lists.map((l) => plistOut(l, all.filter((i) => i.listId === l.id))).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)) };
+  }
+  if (is('POST', 1)) {
+    const name = line(b.name, 60);
+    if (!name) fail(400, 'Name your list');
+    if ((await db.query('USER#' + uid, 'PLIST#')).length >= MAX_PLISTS) fail(400, `Up to ${MAX_PLISTS} private lists`);
+    const id = newId();
+    const l = { pk: 'USER#' + uid, sk: 'PLIST#' + id, id, name, createdAt: now() };
+    await db.put(l);
+    await pchanged(uid, id);
+    return plistOut(l, []);
+  }
+  const l = await plist(db, uid, lid);
+  if (is('GET', 2)) return { list: plistOut(l, []), items: (await pitems(db, uid, lid)).sort(sortP).map(pitemOut) };
+  if (is('PUT', 2)) {
+    const name = line(b.name, 60);
+    if (!name) fail(400, 'Name your list');
+    l.name = name; await db.put(l); await pchanged(uid, lid);
+    return { ok: true };
+  }
+  if (is('DELETE', 2)) {
+    for (const i of await pitems(db, uid, lid)) await db.del(i.pk, i.sk);
+    await db.del(l.pk, l.sk); await pchanged(uid, lid);
+    return { ok: true };
+  }
+  if (y === 'clear-done' && is('POST', 3)) {
+    for (const i of await pitems(db, uid, lid)) if (i.done) await db.del(i.pk, i.sk);
+    await pchanged(uid, lid);
+    return { ok: true };
+  }
+  if (y === 'items' && is('POST', 3)) {
+    const raw = Array.isArray(b.items) ? b.items.slice(0, 100) : [b];
+    const add = raw.map((r) => cleanPItem(r || {})).filter(Boolean);
+    if (!add.length) fail(400, 'Type something to add');
+    if ((await pitems(db, uid, lid)).length + add.length > MAX_PITEMS) fail(400, `Lists hold up to ${MAX_PITEMS} things`);
+    await expandLinks(add);
+    const t = Date.now(), out = [];
+    for (const [k, it] of add.entries()) {
+      const id = newId();
+      const row = { pk: 'USER#' + uid, sk: `PITEM#${lid}#${id}`, id, listId: lid, ...it, done: false, createdAt: new Date(t + k).toISOString() };
+      await db.put(row); out.push(pitemOut(row));
+    }
+    await pchanged(uid, lid);
+    return { items: out };
+  }
+  if (y === 'items' && parts.length === 4) {
+    const row = await db.get('USER#' + uid, `PITEM#${lid}#${iid}`);
+    if (!row) fail(404, 'Item not found');
+    if (method === 'DELETE') { await db.del(row.pk, row.sk); await pchanged(uid, lid); return { ok: true }; }
+    if (method === 'PUT') {
+      if (b.title !== undefined || b.url !== undefined || b.price !== undefined || b.notes !== undefined) {
+        const it = cleanPItem({ ...row, ...b });
+        if (!it) fail(400, 'Give it a name');
+        await expandLinks([it]);
+        Object.assign(row, it);
+      }
+      if (b.done !== undefined) row.done = !!b.done;
+      await db.put(row); await pchanged(uid, lid);
+      return pitemOut(row);
+    }
+  }
+  fail(404, 'Not found');
+}
+
 // ---------- managed accounts (internally "kids") ----------
 // Someone with a normal Cognito account creates accounts for people without an email
 // (kids, grandparents…). They sign in with a one-time code/link and get a long-lived
@@ -676,7 +766,7 @@ async function kidsRoute(db, claims, method, parts, b) {
 // What a kid's own device may do: their list, lists in their groups, marking things bought.
 function kidAllowed(method, parts) {
   const [a, , y] = parts;
-  if (a === 'me' || a === 'items' || a === 'uploads' || a === 'unfurl' || a === 'shopping') return !(a === 'me' && method !== 'GET');
+  if (a === 'me' || a === 'items' || a === 'uploads' || a === 'unfurl' || a === 'shopping' || a === 'private') return !(a === 'me' && method !== 'GET');
   if (a === 'groups') return (method === 'GET' && parts.length === 2) || y === 'lists';
   return false;
 }
@@ -717,6 +807,7 @@ async function route(db, claims, method, parts, b) {
   if (a === 'uploads' && is('POST', 1)) return newUpload(uid, b);
   if (a === 'unfurl' && is('POST', 1)) return lookupLink(uid, b);
   if (a === 'shopping' && is('GET', 1)) return { items: await shopping(db, uid) };
+  if (a === 'private') return privateRoute(db, uid, method, parts, b);
   if (a === 'join' && is('POST', 1)) return joinByCode(db, claims, b);
   if (a === 'groups') {
     if (is('POST', 1)) return createGroup(db, claims, b);

@@ -131,6 +131,8 @@
     [/^#?\/?$/, viewHome],
     [/^#\/list$/, viewMyList],
     [/^#\/shopping$/, viewShopping],
+    [/^#\/private$/, viewPrivateLists],
+    [/^#\/private\/([\w-]+)$/, viewPrivateList],
     [/^#\/me$/, viewMe],
     [/^#\/join\/([A-Za-z0-9]+)$/, viewJoin],
     [/^#\/g\/([\w-]+)$/, viewGroup],
@@ -143,7 +145,7 @@
     for (const [re, fn] of routes) {
       const m = hash.match(re);
       if (!m) continue;
-      const nav = hash.startsWith('#/list') ? 'list' : hash.startsWith('#/shopping') ? 'shopping' : hash.startsWith('#/me') ? 'me' : 'home';
+      const nav = hash.startsWith('#/list') ? 'list' : hash.startsWith('#/shopping') ? 'shopping' : hash.startsWith('#/private') ? 'private' : hash.startsWith('#/me') ? 'me' : 'home';
       document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === nav));
       currentRender = (quiet) => fn(...m.slice(1), quiet);
       if (!fn.noLoading) $view.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
@@ -798,6 +800,94 @@
   }
 
   // ---------- shopping ----------
+  // ---------- private lists (only you see these) ----------
+  async function viewPrivateLists() {
+    const { lists } = await api('GET', '/private');
+    const name = h('input', { placeholder: 'New list name, e.g. Groceries', maxlength: 60 });
+    const create = () => act(async () => {
+      const r = await api('POST', '/private', { name: name.value });
+      location.hash = '#/private/' + r.id;
+    });
+    name.addEventListener('keydown', (e) => e.key === 'Enter' && create());
+    paint(
+      h('h1', {}, 'Private lists'),
+      h('p', { class: 'muted' }, 'Lists only you can see — groceries, errands, packing, gift ideas for other people. Nobody in your groups sees these.'),
+      lists.length
+        ? h('div', { class: 'grid' }, lists.map((l) => h('a', { class: 'card group-card', href: '#/private/' + l.id },
+            h('h3', {}, l.name),
+            h('div', { class: 'row' },
+              h('span', { class: 'pill' }, l.open ? `${l.open} to do` : l.count ? 'All done' : 'Empty'),
+              l.count - l.open ? h('span', { class: 'pill green' }, `${l.count - l.open} checked`) : null))))
+        : h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '🗒️'), h('p', {}, 'No private lists yet. Start one below.')),
+      h('div', { class: 'section card stack' },
+        h('h2', {}, 'New list'),
+        h('div', { class: 'row', style: 'flex-wrap:nowrap' }, name, h('button', { onclick: create }, 'Create'))));
+  }
+
+  async function viewPrivateList(lid) {
+    const { list, items } = await api('GET', '/private/' + lid);
+    const base = '/private/' + lid;
+    const open = items.filter((i) => !i.done), done = items.filter((i) => i.done);
+    const quick = h('textarea', { class: 'quick-add', rows: 1, placeholder: 'Add an item…', 'aria-label': 'Add an item' });
+    const add = async () => {
+      const lines = quick.value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (!lines.length) return;
+      const rows = lines.map((l) => {
+        const m = l.match(/https?:\/\/\S+/);
+        if (!m) return { title: l };
+        const title = (l.slice(0, m.index) + ' ' + l.slice(m.index + m[0].length)).replace(/^[\s\-–—|:]+|[\s\-–—|:]+$/g, '').trim();
+        return { title, url: m[0].replace(/[),.]+$/, '') };
+      });
+      quick.disabled = true;
+      const ok = await act(() => api('POST', base + '/items', { items: rows }));
+      quick.disabled = false;
+      if (ok) { quick.value = ''; await viewPrivateList(lid); const q = $view.querySelector('.quick-add'); if (q) q.focus(); }
+    };
+    quick.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add(); } });
+    quick.addEventListener('input', () => { quick.style.height = 'auto'; quick.style.height = Math.min(quick.scrollHeight, 200) + 'px'; });
+    const row = (i) => {
+      const cb = h('input', { type: 'checkbox', checked: i.done, 'aria-label': (i.done ? 'Uncheck ' : 'Check off ') + i.title,
+        onchange: () => act(async () => { await api('PUT', `${base}/items/${i.id}`, { done: cb.checked }); currentRender(true); }) });
+      return h('div', { class: 'p-item' + (i.done ? ' done' : '') }, cb,
+        h('button', { class: 'p-body', onclick: () => pItemModal(base, i) },
+          h('span', { class: 'p-title' }, i.title),
+          (i.price || i.notes || i.url) && h('span', { class: 'muted small' }, [i.price, i.notes, i.url && host(i.url)].filter(Boolean).join(' · '))),
+        i.url && h('a', { class: 'p-link', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored', 'aria-label': 'Open link for ' + i.title }, '↗'));
+    };
+    paint(
+      h('a', { class: 'back', href: '#/private' }, '← Private lists'),
+      h('div', { class: 'row between' }, h('h1', { style: 'margin:0' }, list.name),
+        h('div', { class: 'row' },
+          h('button', { class: 'ghost small', onclick: () => { const n = prompt('Rename list', list.name); if (n && n.trim()) act(async () => { await api('PUT', base, { name: n }); currentRender(true); }); } }, 'Rename'),
+          h('button', { class: 'danger-text', onclick: () => confirm(`Delete "${list.name}" and everything on it?`) && act(async () => { await api('DELETE', base); location.hash = '#/private'; }, 'List deleted') }, 'Delete'))),
+      h('p', { class: 'muted small' }, 'Only you can see this list. Tip: paste several lines (or links) to add them all at once.'),
+      h('div', { class: 'card', style: 'padding:10px 12px' }, h('div', { class: 'row', style: 'flex-wrap:nowrap;align-items:flex-start' }, quick, h('button', { onclick: add }, 'Add'))),
+      h('div', { class: 'section card p-list' }, open.length ? open.map(row) : h('p', { class: 'muted', style: 'margin:6px 4px' }, items.length ? 'Everything is checked off. 🎉' : 'Nothing here yet — add something above.')),
+      done.length ? h('div', { class: 'section' },
+        h('div', { class: 'row between' }, h('h3', { style: 'margin:0' }, `Checked (${done.length})`),
+          h('button', { class: 'link', onclick: () => act(async () => { await api('POST', base + '/clear-done'); currentRender(true); }, 'Cleared') }, 'Clear checked')),
+        h('div', { class: 'card p-list', style: 'margin-top:8px' }, done.map(row))) : null);
+  }
+
+  function pItemModal(base, i) {
+    const title = h('input', { value: i.title, maxlength: 140 });
+    const url = h('input', { type: 'url', value: i.url || '', placeholder: 'https://… (optional)', inputmode: 'url' });
+    const price = h('input', { value: i.price || '', placeholder: 'Optional', maxlength: 24 });
+    const notes = h('textarea', { maxlength: 600, placeholder: 'Optional' }, i.notes || '');
+    modal('Edit item', h('div', {},
+      h('div', { class: 'field' }, h('label', {}, 'Item'), title),
+      h('div', { class: 'field' }, h('label', {}, 'Link'), url),
+      h('div', { class: 'field' }, h('label', {}, 'Price'), price),
+      h('div', { class: 'field' }, h('label', {}, 'Notes'), notes)),
+      (close) => [
+        h('button', { class: 'danger-text', onclick: () => act(async () => { await api('DELETE', `${base}/items/${i.id}`); close(); currentRender(true); }, 'Removed') }, 'Remove'),
+        h('button', { onclick: () => {
+          let u = url.value.trim();
+          if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
+          act(async () => { await api('PUT', `${base}/items/${i.id}`, { title: title.value, url: u, price: price.value, notes: notes.value }); close(); currentRender(true); }, 'Saved');
+        } }, 'Save')]);
+  }
+
   async function viewShopping() {
     const { items } = await api('GET', '/shopping');
     const by = {};
