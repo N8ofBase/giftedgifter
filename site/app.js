@@ -234,8 +234,8 @@
         h('div', { class: 'card stack' }, h('h2', {}, 'Start a group'), h('p', { class: 'muted small' }, 'A gift exchange with a name draw, or just a family or friends group that shares lists.'), h('button', { onclick: newGroupModal }, '+ New group')),
         joinCard()),
       h('div', { class: 'section card row between' },
-        h('div', {}, h('h3', {}, 'Your wish list'), h('p', { class: 'muted small', style: 'margin:0' }, 'One list, shared with everyone in your groups. Even link your Elfster or Amazon lists.')),
-        h('a', { class: 'btn ghost', href: '#/list' }, 'Edit my list')));
+        h('div', {}, h('h3', {}, 'Your Groups List'), h('p', { class: 'muted small', style: 'margin:0' }, 'One list, shared with everyone in your groups. Even link your Elfster or Amazon lists.')),
+        h('a', { class: 'btn ghost', href: '#/list' }, 'Edit Groups List')));
   }
   function countdown(d) {
     const n = daysUntil(d);
@@ -540,7 +540,7 @@
       h('div', { class: 'row between' },
         h('div', {},
           listOwner && h('a', { class: 'back', href: '#/me' }, '← Account'),
-          h('h1', {}, listOwner ? `${first}'s wish list` : 'My wish list'),
+          h('h1', {}, listOwner ? `${first}'s Groups List` : 'Groups List'),
           h('p', { class: 'muted', style: 'margin:0' },
             listOwner && !groups.length ? `${first} isn't in any of your groups yet — add them under Account → Managed accounts.` :
             tabGroup ? `What people in ${tabGroup.name} see. Things you add here go to this group only.` :
@@ -810,7 +810,7 @@
     });
     name.addEventListener('keydown', (e) => e.key === 'Enter' && create());
     paint(
-      h('h1', {}, 'Private lists'),
+      h('h1', {}, 'My Lists'),
       h('p', { class: 'muted' }, 'Lists only you can see — groceries, errands, packing, gift ideas for other people. Nobody in your groups sees these.'),
       lists.length
         ? h('div', { class: 'grid' }, lists.map((l) => h('a', { class: 'card group-card', href: '#/private/' + l.id },
@@ -855,7 +855,7 @@
         i.url && h('a', { class: 'p-link', href: outLink(i.url), target: '_blank', rel: 'noopener nofollow sponsored', 'aria-label': 'Open link for ' + i.title }, '↗'));
     };
     paint(
-      h('a', { class: 'back', href: '#/private' }, '← Private lists'),
+      h('a', { class: 'back', href: '#/private' }, '← My Lists'),
       h('div', { class: 'row between' }, h('h1', { style: 'margin:0' }, list.name),
         h('div', { class: 'row' },
           h('button', { class: 'ghost small', onclick: () => { const n = prompt('Rename list', list.name); if (n && n.trim()) act(async () => { await api('PUT', base, { name: n }); currentRender(true); }); } }, 'Rename'),

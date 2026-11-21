@@ -35,13 +35,20 @@ p { margin: 0 0 .8em; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font: 700 19px var(--serif); }
 .brand img { width: 32px; height: 32px; }
 .top nav { display: flex; align-items: center; gap: 4px; }
-.top nav a { text-decoration: none; color: var(--muted); font-weight: 600; font-size: 14px; padding: 8px 10px; border-radius: 999px; }
+.brand { flex: none; }
+.top nav a { white-space: nowrap; text-decoration: none; color: var(--muted); font-weight: 600; font-size: 14px; padding: 8px 10px; border-radius: 999px; }
 .top nav a.on { color: var(--pine); background: #e8efe9; }
 .me-link span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--pine); color: #fff; font-size: 13px; }
 .top nav a.me-link { padding: 2px; }
 @media (max-width: 560px) {
   .brand span { display: none; }
   .top nav a { padding: 8px 8px; }
+}
+@media (max-width: 430px) {
+  .top { padding-left: 10px; padding-right: 10px; gap: 6px; }
+  .brand img { width: 28px; height: 28px; }
+  .top nav { gap: 0; }
+  .top nav a { padding: 7px 6px; font-size: 13px; }
 }
 
 main { max-width: 860px; margin: 0 auto; padding: 22px 16px 20px; }
@@ -215,3 +222,7 @@ details.admin[open] > summary::after { content: ' ▴'; }
 .p-item.done .p-title { text-decoration: line-through; color: var(--muted); }
 .p-link { text-decoration: none; font-size: 20px; padding: 8px; min-width: 44px; text-align: center; }
 .quick-add { min-height: 46px; resize: none; }
+@media (max-width: 350px) {
+  .brand { display: none; }
+  .top { justify-content: center; }
+}
