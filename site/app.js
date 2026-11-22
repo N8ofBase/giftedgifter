@@ -69,7 +69,8 @@
     Auth.signOut();
   }
   async function kidSignIn(code) {
-    const res = await fetch(CFG.api + '/public/kid-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    const current = kidSession();
+    const res = await fetch(CFG.api + '/public/kid-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, token: current ? current.token : undefined }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'That code didn\'t work');
     localStorage.setItem(KID, JSON.stringify({ token: data.token, id: data.id, name: data.name }));
@@ -179,6 +180,8 @@
   function clearInvite() { try { localStorage.removeItem(INVITE); } catch (e) {} }
   const inAppBrowser = /FBAN|FBAV|FB_IAB|Instagram|Line\/|Snapchat|GSA\/|musical_ly|TikTok|Twitter|; wv\)/i.test(navigator.userAgent);
 
+  const homeScreen = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
   // ---------- landing ----------
   function landing() {
     const invite = pendingInvite();
@@ -197,7 +200,11 @@
         h('div', { class: 'row' },
           h('button', { onclick: () => Auth.signUp() }, 'Create an account'),
           h('button', { class: 'ghost', onclick: () => Auth.signIn() }, 'Sign in')),
-        h('p', { class: 'small', style: 'margin-top:14px' }, h('button', { class: 'link', onclick: kidSignInModal }, 'Have a sign-in code?'))),
+        h('p', { class: 'small', style: 'margin-top:14px' }, h('button', { class: 'link', onclick: kidSignInModal }, 'Have a sign-in code?')),
+        homeScreen && h('div', { class: 'card invite-note', style: 'margin-top:18px' },
+          h('h3', {}, 'Opened from your home screen?'),
+          h('p', {}, 'Your phone keeps this icon separate from your browser, so sign in once here. Got a sign-in link or code instead of an email? Tap below and enter the code (the 8 letters at the end of your link).'),
+          h('button', { onclick: kidSignInModal }, 'Sign in with your code'))),
       h('div', { class: 'features' },
         feature('📝', 'Your list, your way', 'Type an idea, paste a link from any store, or snap a photo. Even link your Elfster or Amazon lists.'),
         feature('🎩', 'Draw names', 'Secret assignments with rules — spouses and housemates never draw each other.'),
@@ -210,7 +217,7 @@
       btn.disabled = true;
       const ok = await act(() => kidSignIn(input.value));
       btn.disabled = false;
-      if (ok) location.replace('/#/');
+      if (ok) { history.replaceState(null, '', '/#/'); location.reload(); }
     };
     input.addEventListener('keydown', (e) => e.key === 'Enter' && go(e.target));
     modal('Sign in with a code', h('div', {}, h('p', { class: 'muted' }, 'Enter the code from the person who set up your account. They can make a new one in Gifted Gifter under Account → Managed accounts.'), input),
@@ -917,6 +924,10 @@
     me = await api('GET', '/me');
     if (me.kid) {
       const by = me.parentName || 'the person who set it up';
+      const codeCard = () => me.signInCode ? h('div', { class: 'section card stack' },
+        h('h3', {}, 'Your sign-in code'),
+        h('div', { class: 'code-box', style: 'text-align:center' }, me.signInCode),
+        h('p', { class: 'muted small', style: 'margin:0' }, 'Use it to sign in on another device, or in Gifted Gifter on your home screen: tap “Have a sign-in code?” and enter it. Keep it to yourself — it works like a password.')) : null;
       const out = () => h('div', { class: 'section' }, h('button', { class: 'ghost', onclick: () => confirm(`Sign out on this device? You'll need a new sign-in code from ${by} to get back in.`) && signOut() }, 'Sign out'));
       if (me.limited) {
         return paint(
@@ -924,7 +935,7 @@
           h('div', { class: 'card stack' },
             h('div', { class: 'row', style: 'flex-wrap:nowrap' }, avatar(me.name, me.id), h('div', {}, h('div', { style: 'font-weight:600' }, me.name), h('div', { class: 'muted small' }, 'Managed by ' + by))),
             h('p', { class: 'muted small', style: 'margin:0' }, `Want to change your name or groups? Ask ${by}.`)),
-          out());
+          codeCard(), out());
       }
       const nm = h('input', { value: me.name, maxlength: 40 });
       return paint(
@@ -933,7 +944,7 @@
           h('div', { class: 'field' }, h('label', {}, 'Your name (what your groups see)'), nm),
           h('p', { class: 'muted small' }, `Set up by ${by} — no email needed. You're signed in on this device.`),
           h('div', { class: 'row' }, h('button', { onclick: () => act(async () => { const r = await api('PUT', '/me', { name: nm.value }); me.name = r.name; setInitial(); }, 'Saved') }, 'Save'))),
-        out());
+        codeCard(), out());
     }
     const name = h('input', { value: me.name, maxlength: 40 });
     const { kids } = await api('GET', '/kids');
@@ -1029,5 +1040,15 @@
     go();
     connectLive();
   }
-  start();
+  // Never leave a blank page: show what went wrong so it can be reported.
+  function showFatal(err) {
+    if ($view.childElementCount && !$view.querySelector('.loading')) return;
+    $view.replaceChildren(h('div', { class: 'empty' }, h('div', { class: 'emoji' }, '🧩'),
+      h('p', {}, 'Gifted Gifter hit a snag loading. Try closing it and opening it again.'),
+      h('p', { class: 'small muted', style: 'word-break:break-word' }, 'Details: ' + String((err && (err.message || err.reason || err)) || 'unknown').slice(0, 300)),
+      h('button', { onclick: () => location.replace('/') }, 'Reload')));
+  }
+  window.addEventListener('error', (e) => showFatal(e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => showFatal(e.reason));
+  start().catch(showFatal);
 })();

@@ -135,7 +135,7 @@ async function getMe(db, claims) {
   }
   groups.sort((a, b) => (a.date || '9') < (b.date || '9') ? -1 : 1);
   const out = { id: p.uid, name: p.name, email: p.email, groups };
-  if (p.kid) { out.kid = true; out.limited = p.limited !== false; out.parentName = (await db.get('USER#' + p.parentId, 'PROFILE'))?.name || ''; }
+  if (p.kid) { out.kid = true; out.limited = p.limited !== false; out.signInCode = p.loginCode || ''; out.parentName = (await db.get('USER#' + p.parentId, 'PROFILE'))?.name || ''; }
   return out;
 }
 
@@ -724,6 +724,11 @@ async function kidLogin(db, b) {
   if (c.exp) await db.del('KIDCODE#' + code, 'META'); // older 15-minute codes stay one-use
   const kid = await db.get('USER#' + c.kidId, 'PROFILE');
   if (!kid) fail(404, 'That account was removed');
+  // Already signed in as this person on this device? Reuse it instead of adding a device.
+  if (b.token) {
+    const t = await db.get('KIDTOKEN#' + hashToken(b.token), 'META');
+    if (t && t.kidId === kid.uid) return { token: b.token, id: kid.uid, name: kid.name };
+  }
   const token = crypto.randomBytes(32).toString('base64url');
   const hash = hashToken(token);
   await db.put({ pk: 'KIDTOKEN#' + hash, sk: 'META', kidId: kid.uid, createdAt: now() });

@@ -32,6 +32,15 @@
   <p class="aff-note" id="aff-note" hidden></p>
 </footer>
 <div id="toasts" role="status"></div>
+<script>
+// Shown only if the app fails to start (e.g. a phone too old for its code), instead of a blank page.
+window.addEventListener('error', function (e) {
+  setTimeout(function () {
+    var v = document.getElementById('view');
+    if (v && !v.firstChild) v.innerHTML = '<div style="text-align:center;padding:40px 16px;color:#776c62"><p>Gifted Gifter couldn&#39;t start on this browser.</p><p style="font-size:13px">Make sure your phone is up to date, then try again.</p><p style="font-size:12px;word-break:break-word">' + String(e.message || '').replace(/[<>&]/g, '') + '</p></div>';
+  }, 300);
+});
+</script>
 <script src="config.js"></script>
 <script src="affiliate.js"></script>
 <script src="auth.js"></script>
